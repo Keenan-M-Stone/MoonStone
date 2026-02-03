@@ -26,4 +26,19 @@ npm ci
 npm run dev
 ```
 
+## Running tests & notebooks
+- Run unit tests: `pytest -q`
+- Run the methods/test notebook (if you have `nbconvert` and `jupyter` installed):
+
+```bash
+python -m pip install nbconvert jupyter
+jupyter nbconvert --to notebook --execute docs/methods_notebook.ipynb --ExecutePreprocessor.timeout=120
+```
+
+## Development Checklist (current gaps)
+- [ ] Symbolic expansion & device hard-coding of full Christoffel components on-device for maximum fidelity and performance.
+- [ ] Waveform extraction & transformation-optics export path (planned module and exporter).
+- [ ] Advanced GPU profiling and micro-optimizations for CUDA kernels.
+- [ ] More exhaustive CI coverage for GPU-only tests (depends on runner availability).
+
 License: MIT (see `LICENSE`).
