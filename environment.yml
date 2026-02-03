@@ -1,0 +1,24 @@
+name: moonstone
+channels:
+  - conda-forge
+dependencies:
+  - python=3.14
+  - pip
+  - numpy
+  - scipy
+  - numba
+  - dask
+  - distributed
+  - h5py
+  - pyyaml
+  - pytest
+  - pip:
+    - fastapi
+    - "uvicorn[standard]"
+    - einsteinpy
+    - aiohttp
+    - requests
+    - pandas
+    - xarray
+    - scikit-learn
+    - pytest
