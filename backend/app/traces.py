@@ -1,6 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks
 from .models import TraceRequest, TraceResult, TracePoint
-from .geodesics import trace_flat, trace_schwarzschild_weak, trace_delayed
+from .geodesics import trace_flat, trace_schwarzschild_weak, trace_delayed, trace_flat_batch, trace_schwarzschild_batch
 import uuid
 from typing import Dict
 
@@ -15,42 +15,88 @@ async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
     metric = req.metric or {}
     mtype = metric.get('type', 'flat')
 
-    # Choose a worker strategy: use Dask distributed if available, otherwise run locally
-    try:
-        from dask.distributed import Client, as_completed
-        # connect to scheduler if environment variable provided, else create local
-        client = Client() if Client.scheduler_info()['address'] is None else Client()
-        futures = []
-        for d in req.directions:
-            dir_tuple = (d.x, d.y, d.z)
-            if mtype == 'schwarzschild':
-                mass = metric.get('mass', 1.0)
-                fut = client.submit(trace_schwarzschild_weak, (req.source.x, req.source.y, req.source.z), dir_tuple, mass)
-            else:
-                fut = client.submit(trace_flat, (req.source.x, req.source.y, req.source.z), dir_tuple)
-            futures.append(fut)
-        results = client.gather(futures)
-    except Exception:
-        # fallback: simple local map
-        results = []
-        for d in req.directions:
-            dir_tuple = (d.x, d.y, d.z)
-            if mtype == 'schwarzschild':
-                mass = metric.get('mass', 1.0)
-                points = trace_schwarzschild_weak((req.source.x, req.source.y, req.source.z), dir_tuple, mass=mass)
-            else:
-                points = trace_flat((req.source.x, req.source.y, req.source.z), dir_tuple)
-            results.append(points)
+    # Check disk cache first (fast interactive hits)
+    from .cache import cache_get, cache_set, cache_key
+    trace_req_repr = {
+        'source': {'x': req.source.x, 'y': req.source.y, 'z': req.source.z},
+        'directions': [ {'x': d.x, 'y': d.y, 'z': d.z} for d in req.directions ],
+        'metric': metric,
+        'params': req.params or {}
+    }
+    cached = cache_get(trace_req_repr)
+    if cached is not None:
+        # return cached trace result quickly
+        trace_points = [TracePoint(x=p[0], y=p[1], z=p[2]) for p in cached['points']]
+        res = TraceResult(id=cached.get('id', tid), points=trace_points, meta={'cached': True, 'metric': metric})
+        _TRACES[res.id] = res
+        return res
 
-    # For now, record the first direction's trace and include meta for number of directions
-    trace_points = [TracePoint(x=p[0], y=p[1], z=p[2]) for p in (results[0] if results else [])]
-    res = TraceResult(id=tid, points=trace_points, meta={'num_dirs': len(req.directions), 'metric': metric})
+    # Not cached: compute
+    directions = [ (d.x, d.y, d.z) for d in req.directions ]
+    try:
+        # If Dask available, submit a single batched job (better for GPU-enabled workers)
+        from dask.distributed import Client
+        client = Client() if Client.scheduler_info()['address'] is None else Client()
+        # prefer GPU workers when requested
+        submit_options = {}
+        if (req.params or {}).get('device') == 'gpu':
+            submit_options['resources'] = {'GPU': 1}
+
+        if mtype == 'schwarzschild':
+            mass = metric.get('mass', 1.0)
+            fut = client.submit('app.geodesics.trace_schwarzschild_batch', (req.source.x, req.source.y, req.source.z), directions, mass, req.params or {}, **submit_options)
+        else:
+            fut = client.submit('app.geodesics.trace_flat_batch', (req.source.x, req.source.y, req.source.z), directions, req.params or {}, **submit_options)
+        results = client.gather(fut)
+        # client.gather may return the batched result directly or a list with one element depending on serialization
+        # normalize the possible wrapped result
+        if isinstance(results, list) and len(results) == 1 and isinstance(results[0], list):
+            results = results[0]
+    except Exception:
+        # fallback: local batched call
+        if mtype == 'schwarzschild':
+            mass = metric.get('mass', 1.0)
+            results = trace_schwarzschild_batch((req.source.x, req.source.y, req.source.z), directions, mass, req.params or {})
+        else:
+            results = trace_flat_batch((req.source.x, req.source.y, req.source.z), directions, req.params or {})
+
+    # record and cache
+    pts_list = results[0] if results else []
+    cache_set(trace_req_repr, {'id': tid, 'points': pts_list})
+    trace_points = [TracePoint(x=p[0], y=p[1], z=p[2]) for p in pts_list]
+
+    # Infer if a GPU analytic Kerr kernel was requested/used
+    params_in = req.params or {}
+    device_analytic_requested = False
+    device_analytic_executed = False
+    if params_in.get('method') == 'kerr_formal' and params_in.get('device') == 'gpu':
+        device_analytic_requested = bool(params_in.get('analytic', True))
+        # try to read the last kernel provenance information
+        try:
+            from . import accelerated_cuda
+            prov = getattr(accelerated_cuda, '_LAST_KERNEL_INFO', {})
+            device_analytic_executed = bool(prov.get('executed_analytic', False))
+        except Exception:
+            device_analytic_executed = False
+
+    res_meta = {'cached': False, 'num_dirs': len(req.directions), 'metric': metric, 'device_analytic_requested': device_analytic_requested, 'device_analytic_executed': device_analytic_executed}
+    res = TraceResult(id=tid, points=trace_points, meta=res_meta)
     _TRACES[tid] = res
     return res
 
 @router.get('/trace/{trace_id}', response_model=TraceResult)
 async def get_trace(trace_id: str):
     return _TRACES[trace_id]
+
+
+@router.get('/gpu')
+async def gpu_status():
+    """Report whether a CUDA-capable GPU is available on this server."""
+    try:
+        from stardust.gpu import is_cuda_available
+        return {'cuda': bool(is_cuda_available())}
+    except Exception:
+        return {'cuda': False}
 
 
 @router.post('/metric')
@@ -71,6 +117,95 @@ async def get_metric_sample(point: TracePoint, metric: dict = None):
     }
 
 
+from fastapi import Request
+
+@router.post('/bench')
+async def bench_solver(request: Request):
+    """Run small benchmarks for requested solvers and return timing info.
+
+    Accepts either:
+    - JSON body { "solver": "weak" }
+    - or { "solvers": ["weak","rk4"] }
+
+    Returns per-solver mean times and estimates. If a single solver is requested
+    the response keeps the historical single-solver shape for compatibility.
+    """
+    import time
+    payload = await request.json() if request else {}
+    metric = payload.get('metric', {}) if isinstance(payload, dict) else {}
+    params = payload.get('params', {}) if isinstance(payload, dict) else {}
+    ntest = int(params.get('ntest', 4))
+    npoints = int(params.get('npoints', 256))
+    mass = metric.get('mass', 1.0)
+
+    from .geodesics import trace_flat, trace_schwarzschild_weak, trace_schwarzschild_rk4, trace_schwarzschild_rk4_adaptive, trace_null_geodesic, trace_null_formal, trace_kerr_formal
+
+    # normalize solvers list
+    if isinstance(payload, dict) and 'solvers' in payload:
+        sol_list = payload['solvers']
+    elif isinstance(payload, dict) and 'solver' in payload:
+        sol_list = [payload['solver']]
+    else:
+        # if not provided, benchmark the defaults
+        sol_list = ['weak', 'rk4', 'rk4_adaptive', 'null', 'null_formal', 'kerr_formal']
+
+    def run_one(solver_name):
+        src = (0.0, 1.0, 0.0)
+        dir = (1.0, 0.0, 0.0)
+        if solver_name == 'weak':
+            _ = trace_schwarzschild_weak(src, dir, mass, {'npoints': npoints, 'step': params.get('step',1e-6)})
+        elif solver_name == 'rk4':
+            _ = trace_schwarzschild_rk4(src, dir, mass, {'npoints': npoints, 'step': params.get('step',1e-6)})
+        elif solver_name == 'rk4_adaptive':
+            _ = trace_schwarzschild_rk4_adaptive(src, dir, mass, {'npoints': npoints, 'step': params.get('step',1e-6), 'tol': params.get('tol',1e-7)})
+        elif solver_name == 'null':
+            _ = trace_null_geodesic(src, dir, mass, {'npoints': npoints, 'step': params.get('step',1e-6)})
+        elif solver_name == 'null_formal':
+            _ = trace_null_formal(src, dir, mass, {'npoints': npoints, 'step': params.get('step',1e-6)})
+        elif solver_name == 'kerr_formal':
+            _ = trace_kerr_formal(src, dir, mass, params={'npoints': npoints, 'step': params.get('step',1e-6), 'formal': True})
+        else:
+            _ = trace_schwarzschild_weak(src, dir, mass, {'npoints': npoints, 'step': params.get('step',1e-6)})
+
+    results = {}
+    for sname in sol_list:
+        times = []
+        for i in range(ntest):
+            t0 = time.time()
+            run_one(sname)
+            t1 = time.time()
+            times.append(t1 - t0)
+        mean = sum(times)/len(times)
+        results[sname] = {'mean_sec': mean, 'per_1000_rays': mean * 1000}
+
+    # If a single solver was requested, return the historical single-solver shape
+    if isinstance(payload, dict) and ('solver' in payload or ('solvers' in payload and len(payload['solvers']) == 1)):
+        sname = sol_list[0]
+        return {'solver': sname, 'npoints': npoints, 'ntest': ntest, 'mean_sec': results[sname]['mean_sec'], 'estimate': {'per_ray': results[sname]['mean_sec'], 'per_1000_rays': results[sname]['per_1000_rays']}}
+
+    # store bench summary for each solver in persistent store
+    try:
+        from .bench_store import add_entry
+        import time as _time
+        ts = _time.time()
+        for sname, info in results.items():
+            add_entry({'solver': sname, 'mean_sec': info['mean_sec'], 'per_1000_rays': info['per_1000_rays'], 'npoints': npoints, 'ntest': ntest, 'ts': ts})
+    except Exception:
+        pass
+
+    # store bench summary for each solver in persistent store
+    try:
+        from .bench_store import add_entry
+        import time as _time
+        ts = _time.time()
+        for sname, info in results.items():
+            add_entry({'solver': sname, 'mean_sec': info['mean_sec'], 'per_1000_rays': info['per_1000_rays'], 'npoints': npoints, 'ntest': ntest, 'ts': ts})
+    except Exception:
+        pass
+
+    return {'npoints': npoints, 'ntest': ntest, 'results': results}
+
+
 @router.post('/export')
 async def export_trace_tensor(trace_id: str):
     """Export constitutive tensors sampled along a stored trace (JSON)."""
@@ -84,3 +219,64 @@ async def export_trace_tensor(trace_id: str):
         t = constitutive_at((p.x, p.y, p.z), metric)
         samples.append({'point': {'x': p.x, 'y': p.y, 'z': p.z}, 'eps': t['eps'].tolist(), 'mu': t['mu'].tolist(), 'xi': t['xi'].tolist()})
     return {'trace_id': trace_id, 'metric': metric, 'samples': samples}
+
+
+@router.post('/bench/save')
+async def bench_save(body: dict):
+    """Persist a benchmark entry. Body should include solver, mean_sec, npoints, etc."""
+    try:
+        from .bench_store import add_entry
+        add_entry(body)
+        return {'status': 'ok'}
+    except Exception as e:
+        return {'error': str(e)}
+
+
+@router.get('/bench/history')
+async def bench_history():
+    try:
+        from .bench_store import aggregate_by_solver
+        return {'by_solver': aggregate_by_solver()}
+    except Exception as e:
+        return {'error': str(e)}
+
+
+# WebSocket streaming endpoint for progressive trace updates
+from fastapi import WebSocket, WebSocketDisconnect
+
+@router.websocket('/trace/ws')
+async def trace_ws(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        req = await websocket.receive_json()
+        # expect payload like: { source, directions, metric, params }
+        source = req.get('source', {'x':0,'y':0,'z':0})
+        metric = req.get('metric', {}) or {}
+        directions = req.get('directions', [])
+        params = req.get('params', {}) or {}
+        mtype = metric.get('type', 'flat')
+        # Stream per-direction partial results
+        for i, d in enumerate(directions):
+            dir_tuple = (d.get('x',0.0), d.get('y',0.0), d.get('z',0.0))
+            if mtype == 'schwarzschild':
+                mass = metric.get('mass', 1.0)
+                pts = trace_schwarzschild_batch((source['x'], source['y'], source['z']), [dir_tuple], mass, params)[0]
+            else:
+                pts = trace_flat_batch((source['x'], source['y'], source['z']), [dir_tuple], params)[0]
+            # prepare provenance/meta flags for streaming
+            device_analytic_requested = False
+            device_analytic_executed = False
+            if params.get('method') == 'kerr_formal' and params.get('device') == 'gpu':
+                device_analytic_requested = bool(params.get('analytic', True))
+                try:
+                    from . import accelerated_cuda
+                    prov = getattr(accelerated_cuda, '_LAST_KERNEL_INFO', {})
+                    device_analytic_executed = bool(prov.get('executed_analytic', False))
+                except Exception:
+                    device_analytic_executed = False
+            # send progressive chunk
+            await websocket.send_json({'type': 'partial', 'dir_index': i, 'points': [[float(p[0]), float(p[1]), float(p[2])] for p in pts], 'meta': {'dir': i, 'device_analytic_requested': device_analytic_requested, 'device_analytic_executed': device_analytic_executed}})
+        await websocket.send_json({'type': 'done', 'meta': {'device_analytic_requested': device_analytic_requested, 'device_analytic_executed': device_analytic_executed}})
+    except WebSocketDisconnect:
+        # client disconnected
+        return

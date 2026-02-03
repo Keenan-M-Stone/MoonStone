@@ -17,4 +17,26 @@ export async function exportTrace(traceId: string){
   return r.data
 }
 
+export async function saveScene(scene: any){
+  const r = await axios.post(`${API_BASE}/moon/scene`, scene)
+  return r.data
+}
+
+export async function loadScene(id: string){
+  const r = await axios.get(`${API_BASE}/moon/scene/${id}`)
+  return r.data
+}
+
+export async function listScenes(){
+  const r = await axios.get(`${API_BASE}/moon/scenes`)
+  return r.data
+}
+
+export async function listScenes(){
+  const r = await axios.get(`${API_BASE}/moon/scenes`)
+  return r.data
+}
+
+export default {}
+
 export default {}
