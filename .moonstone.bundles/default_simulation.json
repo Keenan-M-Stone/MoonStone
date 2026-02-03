@@ -1,0 +1,8 @@
+{
+  "name": "default_kerr_formal_analytic",
+  "description": "Demo bundle: single-ray Kerr formal run requesting analytic device kernel",
+  "source": {"x": 10.0, "y": 0.0, "z": 0.0},
+  "directions": [{"x": -1.0, "y": 0.0, "z": 0.0}],
+  "metric": {"type": "schwarzschild", "mass": 1.0},
+  "params": {"method": "kerr_formal", "device": "gpu", "analytic": true, "npoints": 256, "step": 1e-6}
+}

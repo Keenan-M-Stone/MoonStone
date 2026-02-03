@@ -1,0 +1,44 @@
+/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/cli/dask_scheduler.py:142: FutureWarning: dask-scheduler is deprecated and will be removed in a future release; use `dask scheduler` instead
+  warnings.warn(
+2026-02-03 13:52:32,556 - distributed.scheduler - INFO - -----------------------------------------------
+2026-02-03 13:52:32,925 - distributed.http.proxy - INFO - To route to workers diagnostics web server please install jupyter-server-proxy: python -m pip install jupyter-server-proxy
+2026-02-03 13:52:32,941 - distributed.scheduler - INFO - State start
+2026-02-03 13:52:32,944 - distributed.scheduler - INFO - -----------------------------------------------
+2026-02-03 13:52:32,945 - distributed.scheduler - INFO -   Scheduler at: tcp://172.25.221.234:8786
+2026-02-03 13:52:32,945 - distributed.scheduler - INFO -   dashboard at:  http://172.25.221.234:8787/status
+2026-02-03 13:52:32,946 - distributed.scheduler - INFO - Registering Worker plugin shuffle
+2026-02-03 13:52:33,985 - distributed.scheduler - INFO - Register worker addr: tcp://127.0.0.1:41441 name: tcp://127.0.0.1:41441
+2026-02-03 13:52:33,989 - distributed.scheduler - INFO - Starting worker compute stream, tcp://127.0.0.1:41441
+2026-02-03 13:52:33,990 - distributed.core - INFO - Starting established connection to tcp://127.0.0.1:53042
+2026-02-03 13:52:57,977 - tornado.application - ERROR - Exception in callback functools.partial(<function TCPServer._handle_connection.<locals>.<lambda> at 0x7329aafc16f0>, <Task finished name='Task-1683' coro=<BaseTCPListener._handle_stream() done, defined at /home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/comm/tcp.py:655> exception=MemoryError((7235383747985818951,), dtype('uint8'))>)
+Traceback (most recent call last):
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/tornado/ioloop.py", line 758, in _run_callback
+    ret = callback()
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/tornado/tcpserver.py", line 387, in <lambda>
+    gen.convert_yielded(future), lambda f: f.result()
+                                           ~~~~~~~~^^
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/comm/tcp.py", line 667, in _handle_stream
+    await self.on_connection(comm)
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/comm/core.py", line 288, in on_connection
+    return await super().on_connection(comm, handshake_overrides)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/comm/core.py", line 267, in on_connection
+    handshake = await comm.read()
+                ^^^^^^^^^^^^^^^^^
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/comm/tcp.py", line 228, in read
+    frames_nosplit = await read_bytes_rw(stream, frames_nosplit_nbytes)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/comm/tcp.py", line 360, in read_bytes_rw
+    buf = host_array(n)
+  File "/home/lemma137/miniconda3/envs/moonstone/lib/python3.14/site-packages/distributed/protocol/utils.py", line 29, in host_array
+    return numpy.empty((n,), dtype="u1").data
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 6.28 EiB for an array with shape (7235383747985818951,) and data type uint8
+2026-02-03 13:54:50,948 - distributed._signals - INFO - Received signal SIGTERM (15)
+2026-02-03 13:54:50,948 - distributed.scheduler - INFO - Closing scheduler. Reason: signal-15
+2026-02-03 13:54:50,949 - distributed.scheduler - INFO - Scheduler closing all comms
+2026-02-03 13:54:50,949 - distributed.core - INFO - Connection to tcp://127.0.0.1:53042 has been closed.
+2026-02-03 13:54:50,949 - distributed.scheduler - INFO - Remove worker addr: tcp://127.0.0.1:41441 name: tcp://127.0.0.1:41441 (stimulus_id='handle-worker-cleanup-1770144890.94979')
+2026-02-03 13:54:50,950 - distributed.scheduler - INFO - Lost all workers
+2026-02-03 13:54:50,950 - distributed.scheduler - INFO - Stopped scheduler at 'tcp://172.25.221.234:8786'
+2026-02-03 13:54:50,951 - distributed.scheduler - INFO - End scheduler
