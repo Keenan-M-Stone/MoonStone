@@ -32,11 +32,4 @@ export async function listScenes(){
   return r.data
 }
 
-export async function listScenes(){
-  const r = await axios.get(`${API_BASE}/moon/scenes`)
-  return r.data
-}
-
-export default {}
-
 export default {}

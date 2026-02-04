@@ -4,6 +4,8 @@ MoonStone — interactive GUI and computation pipeline for general relativistic 
 
 This repository is a starting scaffold created from the SunStone project. It contains:
 
+Note: The frontend uses the `@stardust/ui` package (StarDust) as a minimal CAD UI framework that provides an application frame, menu bar, tools/inspector panels and a `CADCanvas` mount point for Three.js. See `StarDust/frontend/README.md` for details and demo.
+
 - `frontend/` — Vite + React + TypeScript frontend (UlfPanel stub, Three.js integration)
 - `backend/` — Python (FastAPI) backend with Dask-ready trace worker and a Schwarzschild POC
 - `docs/` — design & roadmap adapted from SunStone's Ulf design

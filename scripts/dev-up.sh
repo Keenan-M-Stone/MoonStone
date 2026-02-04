@@ -94,10 +94,10 @@ if [ -f "$PIDS_DIR/dask-scheduler.pid" ]; then
   echo "dask-scheduler pid: $(cat $PIDS_DIR/dask-scheduler.pid)"
 fi
 
-# Attempt to open the UI in the default browser (Vite default port 5173)
+# Attempt to open the UI in the default browser (Vite dev server default port 3000 as configured)
 if command -v xdg-open >/dev/null 2>&1; then
   sleep 1
-  xdg-open "http://localhost:5173" >/dev/null 2>&1 || true
+  xdg-open "http://localhost:3000" >/dev/null 2>&1 || true
 fi
 
 echo "Dev environment started. Use scripts/dev-down.sh to stop."

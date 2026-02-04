@@ -45,6 +45,33 @@ jobs:
           cd frontend
           npm run lint || true
 
+  build-stardust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - name: Install and build StarDust frontend
+        run: |
+          cd StarDust/frontend
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build
+      - name: Run npm audit and fail on high/critical
+        run: |
+          cd StarDust/frontend
+          npm audit --json > audit.json || true
+          python - <<'PY'
+import json
+d=json.load(open('audit.json'))
+v=d.get('metadata', {}).get('vulnerabilities', {})
+if v.get('high',0)>0 or v.get('critical',0)>0:
+    print('High/critical vulnerabilities found:', v)
+    raise SystemExit(2)
+print('No high/critical vulnerabilities')
+PY
+
   gpu-tests:
     # GPU tests will only run on self-hosted runners with CUDA
     runs-on: [self-hosted, linux]

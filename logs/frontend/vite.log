@@ -3,19 +3,58 @@
 > vite
 
 [33mThe CJS build of Vite's Node API is deprecated. See https://vitejs.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
-failed to load config from /home/lemma137/dev/MoonStone/frontend/vite.config.ts
-error when starting dev server:
-Error: Cannot find module '@vitejs/plugin-react'
-Require stack:
-- /home/lemma137/dev/MoonStone/frontend/vite.config.ts
-- /home/lemma137/dev/MoonStone/frontend/node_modules/vite/dist/node/chunks/dep-nGG-_oRu.js
-    at Module._resolveFilename (node:internal/modules/cjs/loader:1420:15)
-    at defaultResolveImpl (node:internal/modules/cjs/loader:1058:19)
-    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1063:22)
-    at Module._load (node:internal/modules/cjs/loader:1226:37)
-    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
-    at wrapModuleLoad (node:internal/modules/cjs/loader:244:24)
-    at Module.require (node:internal/modules/cjs/loader:1503:12)
-    at require (node:internal/modules/helpers:152:16)
-    at Object.<anonymous> (/home/lemma137/dev/MoonStone/frontend/vite.config.ts:36:35)
-    at Module._compile (node:internal/modules/cjs/loader:1760:14)
+
+  VITE v5.1.0  ready in 231 ms
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: use --host to expose
+3:05:40 PM [vite] hmr update /src/UlfPanel.tsx
+3:06:01 PM [vite] hmr update /src/UlfPanel.tsx
+3:06:12 PM [vite] ✨ new dependencies optimized: three/examples/jsm/controls/OrbitControls, three/examples/jsm/controls/TransformControls
+3:06:12 PM [vite] ✨ optimized dependencies changed. reloading
+3:16:10 PM [vite] hmr update /@fs/home/lemma137/dev/StarDust/frontend/src/components/InspectorBase.tsx
+3:16:10 PM [vite] hmr update /@fs/home/lemma137/dev/StarDust/frontend/src/components/PanelBase.tsx
+3:16:23 PM [vite] hmr update /src/UlfPanel.tsx
+3:16:31 PM [vite] hmr update /src/UlfPanel.tsx
+3:18:00 PM [vite] hmr update /src/UlfPanel.tsx
+3:18:15 PM [vite] hmr update /src/UlfPanel.tsx
+3:37:07 PM [vite] hmr update /src/UlfPanel.tsx
+3:38:46 PM [vite] hmr update /src/UlfPanel.tsx
+3:39:44 PM [vite] hmr update /src/UlfPanel.tsx
+3:40:28 PM [vite] hmr update /src/UlfPanel.tsx
+3:46:43 PM [vite] hmr update /src/UlfPanel.tsx
+3:46:43 PM [vite] hmr update /@fs/home/lemma137/dev/StarDust/frontend/src/components/InspectorBase.tsx
+3:46:43 PM [vite] hmr update /@fs/home/lemma137/dev/StarDust/frontend/src/components/PanelBase.tsx
+6:35:27 PM [vite] hmr update /src/UlfPanel.tsx
+6:35:35 PM [vite] hmr update /src/UlfPanel.tsx
+6:35:44 PM [vite] hmr update /src/UlfPanel.tsx
+6:36:28 PM [vite] hmr update /src/UlfPanel.tsx
+6:36:58 PM [vite] hmr update /src/UlfPanel.tsx
+6:38:20 PM [vite] hmr update /src/UlfPanel.tsx
+6:39:59 PM [vite] hmr update /src/UlfPanel.tsx
+6:40:42 PM [vite] hmr update /src/UlfPanel.tsx
+6:41:34 PM [vite] hmr update /src/UlfPanel.tsx
+6:43:36 PM [vite] hmr update /src/UlfPanel.tsx
+6:44:20 PM [vite] hmr update /src/UlfPanel.tsx
+6:44:35 PM [vite] hmr update /src/UlfPanel.tsx
+6:44:45 PM [vite] hmr update /src/UlfPanel.tsx
+6:44:52 PM [vite] hmr update /src/UlfPanel.tsx
+6:45:19 PM [vite] hmr update /src/UlfPanel.tsx
+6:45:34 PM [vite] hmr update /src/UlfPanel.tsx
+6:46:00 PM [vite] hmr update /src/UlfPanel.tsx
+6:46:08 PM [vite] hmr update /src/UlfPanel.tsx
+6:46:15 PM [vite] hmr update /src/UlfPanel.tsx
+6:46:29 PM [vite] hmr update /src/RunPanel.tsx
+6:47:05 PM [vite] hmr update /src/UlfPanel.tsx
+6:47:26 PM [vite] hmr update /src/UlfPanel.tsx
+6:47:51 PM [vite] hmr update /src/UlfPanel.tsx
+6:48:09 PM [vite] hmr update /src/UlfPanel.tsx
+7:01:25 PM [vite] hmr update /src/RunPanel.tsx
+7:01:53 PM [vite] hmr update /src/App.tsx
+7:03:20 PM [vite] hmr update /@fs/home/lemma137/dev/StarDust/frontend/src/components/RunPanelBase.tsx
+7:03:46 PM [vite] hmr update /src/App.tsx
+8:40:25 PM [vite] hmr update /src/RunPanel.tsx
+8:40:25 PM [vite] hmr update /src/RunPanel.tsx
+8:40:25 PM [vite] hmr update /src/App.tsx
+8:40:25 PM [vite] hmr update /src/UlfPanel.tsx
+8:40:25 PM [vite] hmr update /@fs/home/lemma137/dev/StarDust/frontend/src/components/RunPanelBase.tsx

@@ -26,7 +26,7 @@ export default function RunPanel(){
         if(r.data && r.data.results){
           // push each solver summary
           for(const [name, info] of Object.entries(r.data.results)){
-            await axios.post(`${API_BASE}/moon/bench/save`, { solver: name, mean_sec: info.mean_sec, per_1000_rays: info.per_1000_rays, npoints: r.data.npoints, ntest: r.data.ntest })
+            await axios.post(`${API_BASE}/moon/bench/save`, { solver: name, mean_sec: (info as any).mean_sec, per_1000_rays: (info as any).per_1000_rays, npoints: r.data.npoints, ntest: r.data.ntest })
           }
         }
       }catch(e){ console.error('bench save error', e) }
