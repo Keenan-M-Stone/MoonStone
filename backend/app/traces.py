@@ -114,6 +114,7 @@ async def get_metric_sample(point: TracePoint, metric: dict = None):
         'eps': tensors['eps'].tolist(),
         'mu': tensors['mu'].tolist(),
         'xi': tensors['xi'].tolist(),
+        'zeta': tensors['zeta'].tolist(),
     }
 
 
@@ -217,7 +218,7 @@ async def export_trace_tensor(trace_id: str):
     metric = trace.meta.get('metric', {}) if trace.meta else {}
     for p in trace.points:
         t = constitutive_at((p.x, p.y, p.z), metric)
-        samples.append({'point': {'x': p.x, 'y': p.y, 'z': p.z}, 'eps': t['eps'].tolist(), 'mu': t['mu'].tolist(), 'xi': t['xi'].tolist()})
+        samples.append({'point': {'x': p.x, 'y': p.y, 'z': p.z}, 'eps': t['eps'].tolist(), 'mu': t['mu'].tolist(), 'xi': t['xi'].tolist(), 'zeta': t['zeta'].tolist()})
     return {'trace_id': trace_id, 'metric': metric, 'samples': samples}
 
 

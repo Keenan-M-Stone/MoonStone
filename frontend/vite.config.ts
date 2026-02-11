@@ -9,12 +9,16 @@ const starDustSrc = (function(){
   return null
 })()
 
+const starDustEntrypoint = starDustSrc ? path.resolve(starDustSrc, 'stardust-ui.ts') : null
+const starDustCss = starDustSrc ? path.resolve(starDustSrc, 'index.css') : null
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      ...(starDustSrc ? { '@stardust/ui': starDustSrc } : {})
-    }
+    alias: [
+      ...(starDustCss ? [{ find: '@stardust/ui/index.css', replacement: starDustCss }] : []),
+      ...(starDustEntrypoint ? [{ find: '@stardust/ui', replacement: starDustEntrypoint }] : []),
+    ]
   },
   server: {
     port: 3000,

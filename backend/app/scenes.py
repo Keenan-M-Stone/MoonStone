@@ -8,9 +8,32 @@ router = APIRouter()
 SCENE_DIR = Path(__file__).resolve().parents[1] / 'scenes'
 SCENE_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def _extract_scene_id(body: Dict[str, Any]) -> str | None:
+    # Legacy payloads stored an id at the root.
+    root_id = body.get('id')
+    if isinstance(root_id, str) and root_id:
+        return root_id
+
+    # New convention: stardust.bundle with MoonStone scene under manifest.extra.moonstone.scene
+    try:
+        scene_id = (
+            body.get('manifest', {})
+            .get('extra', {})
+            .get('moonstone', {})
+            .get('scene', {})
+            .get('id')
+        )
+        if isinstance(scene_id, str) and scene_id:
+            return scene_id
+    except Exception:
+        pass
+
+    return None
+
 @router.post('/scene')
 async def save_scene(body: Dict[str, Any]):
-    sid = body.get('id') or str(uuid.uuid4())
+    sid = _extract_scene_id(body) or str(uuid.uuid4())
     p = SCENE_DIR / f"{sid}.json"
     with p.open('w') as fh:
         json.dump(body, fh)

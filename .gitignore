@@ -7,9 +7,12 @@ dist/
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 venv/
 .env/
 
 # OS
 .DS_Store
 *.swp
+*.log
+*.pid
