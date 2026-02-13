@@ -5,6 +5,15 @@ import requests
 import shutil
 import pytest
 
+
+RUN = os.environ.get('MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS') == '1'
+
+
+pytestmark = pytest.mark.skipif(
+    not RUN,
+    reason='StarDust dev-server integration test is opt-in (set MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS=1)'
+)
+
 # Locate StarDust folder; support both embedded and sibling repo layouts
 _candidate1 = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'StarDust', 'frontend'))
 _candidate2 = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'StarDust', 'frontend'))

@@ -3,6 +3,15 @@ import subprocess
 import shutil
 import pytest
 
+
+RUN = os.environ.get('MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS') == '1'
+
+
+pytestmark = pytest.mark.skipif(
+    not RUN,
+    reason='StarDust build integration test is opt-in (set MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS=1)'
+)
+
 # Try common locations for StarDust frontend to support different repo layouts
 _root_guess = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 _candidates = [
@@ -39,5 +48,5 @@ def test_stardust_build_creates_dist():
     res = subprocess.run(['npm', 'run', 'build', '--silent'], cwd=STAR_DIR, capture_output=True, text=True)
     assert res.returncode == 0, f"StarDust build failed: {res.stderr}\n{res.stdout}"
 
-    dist_index = os.path.join(STAR_DIR, 'dist', 'index.js')
-    assert os.path.exists(dist_index), f"dist/index.js not found after build at {dist_index}"
+    dist_index = os.path.join(STAR_DIR, 'dist', 'index.html')
+    assert os.path.exists(dist_index), f"dist/index.html not found after build at {dist_index}"

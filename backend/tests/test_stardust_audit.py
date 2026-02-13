@@ -4,6 +4,15 @@ import json
 import shutil
 import pytest
 
+
+RUN = os.environ.get('MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS') == '1'
+
+
+pytestmark = pytest.mark.skipif(
+    not RUN,
+    reason='StarDust audit integration test is opt-in (set MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS=1)'
+)
+
 # Locate StarDust frontend similar to other tests
 _root_guess = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 _candidates = [

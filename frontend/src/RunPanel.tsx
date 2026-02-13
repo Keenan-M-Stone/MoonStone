@@ -1,8 +1,7 @@
 import React, { useState } from 'react'
 import axios from 'axios'
-import { RunPanelBase } from '@stardust/ui'
 
-const API_BASE = process.env.VITE_API_BASE || 'http://localhost:8000'
+import { API_BASE } from './api'
 
 export default function RunPanel(){
   const [solver, setSolver] = useState('interactive')
@@ -33,8 +32,8 @@ export default function RunPanel(){
     }catch(e){ console.error('bench error', e); setBenchData(null) }
   }
 
-  async function submit(opts:any){
-    const body = { solver: opts.mode || solver, solver_method: solverMethod, n_dirs: nDirs, source: {x: -1e-6, y: 0, z:0}, metric: {type:'schwarzschild', mass: 1.0} }
+  async function submit(){
+    const body = { solver: solver, solver_method: solverMethod, n_dirs: nDirs, source: {x: -1e-6, y: 0, z:0}, metric: {type:'schwarzschild', mass: 1.0} }
     const r = await axios.post(`${API_BASE}/moon/run`, body)
     setRunningId(r.data.run_id)
     setStatus('queued')
@@ -55,7 +54,32 @@ export default function RunPanel(){
 
   return (
     <div style={{padding: 12, borderLeft: '1px solid #ddd'}}>
-      <RunPanelBase onSubmit={submit} />
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label>
+          Run mode
+          <select value={solver} onChange={(e) => setSolver(e.target.value)} style={{ marginLeft: 6 }}>
+            <option value="interactive">Interactive (quick)</option>
+            <option value="batch">Backend (batch)</option>
+          </select>
+        </label>
+
+        <label>
+          Rays
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={nDirs}
+            onChange={(e) => {
+              const v = e.currentTarget.valueAsNumber
+              setNDirs(Number.isFinite(v) ? Math.max(1, Math.floor(v)) : nDirs)
+            }}
+            style={{ width: 90, marginLeft: 6 }}
+          />
+        </label>
+
+        <button onClick={submit}>Submit</button>
+      </div>
 
       <div style={{marginTop:8}}>
         <label>Solver method

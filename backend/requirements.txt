@@ -1,7 +1,17 @@
 fastapi==0.95.2
 uvicorn[standard]==0.22.0
 pydantic==1.10.11
-numpy==1.26.4
-scipy==1.11.3
-dask[distributed]==2026.2.0
-pytest==7.4.0
+
+# NumPy/SciPy wheels are Python-version sensitive.
+numpy==1.26.4; python_version < '3.13'
+numpy>=2.1.0; python_version >= '3.13'
+
+scipy==1.11.3; python_version < '3.13'
+scipy>=1.15.0; python_version >= '3.13'
+
+dask[distributed]==2026.1.2
+
+pytest==7.4.0; python_version < '3.13'
+pytest>=8.2.0; python_version >= '3.13'
+
+pytest-timeout==2.3.1

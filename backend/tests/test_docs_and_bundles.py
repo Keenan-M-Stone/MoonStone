@@ -1,12 +1,18 @@
-import os
+from pathlib import Path
+
 from app import bundle_utils
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
 def test_docs_exist_and_nonempty():
-    assert os.path.exists('docs/software_spec.md')
-    assert os.path.getsize('docs/software_spec.md') > 10
-    assert os.path.exists('docs/methods.md')
-    assert os.path.getsize('docs/methods.md') > 10
+    spec = ROOT / 'docs' / 'software_spec.md'
+    methods = ROOT / 'docs' / 'methods.md'
+    assert spec.exists()
+    assert spec.stat().st_size > 10
+    assert methods.exists()
+    assert methods.stat().st_size > 10
 
 
 def test_bundle_load_default():

@@ -2,7 +2,7 @@ name: moonstone
 channels:
   - conda-forge
 dependencies:
-  - python=3.14
+  - python=3.11
   - pip
   - numpy
   - scipy
@@ -13,12 +13,10 @@ dependencies:
   - pyyaml
   - pytest
   - pip:
-    - fastapi
-    - "uvicorn[standard]"
+    - -r backend/requirements.txt
     - einsteinpy
     - aiohttp
     - requests
     - pandas
     - xarray
     - scikit-learn
-    - pytest

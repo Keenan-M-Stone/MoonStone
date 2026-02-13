@@ -43,4 +43,10 @@ jupyter nbconvert --to notebook --execute docs/methods_notebook.ipynb --ExecuteP
 - [ ] Advanced GPU profiling and micro-optimizations for CUDA kernels.
 - [ ] More exhaustive CI coverage for GPU-only tests (depends on runner availability).
 
-License: MIT (see `LICENSE`).
+## License
+
+MoonStone is licensed under the MIT License. See:
+
+- `LICENSE`
+- `THIRD_PARTY_NOTICES.md`
+- `ATTRIBUTION.md`

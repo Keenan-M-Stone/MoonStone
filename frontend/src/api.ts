@@ -1,6 +1,13 @@
 import axios from 'axios'
 
-const API_BASE = process.env.VITE_API_BASE || 'http://localhost:8000'
+function computeApiBase(): string {
+  const fromVite = (import.meta as any).env?.VITE_API_BASE as string | undefined
+  const fromProcess = (typeof process !== 'undefined' ? (process as any).env?.VITE_API_BASE : undefined) as string | undefined
+  const base = (fromVite ?? fromProcess ?? 'http://localhost:8000').replace(/\/+$/, '')
+  return base
+}
+
+export const API_BASE = computeApiBase()
 
 export async function fetchTrace(payload: any){
   const r = await axios.post(`${API_BASE}/moon/trace`, payload)

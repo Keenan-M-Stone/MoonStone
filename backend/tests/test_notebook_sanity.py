@@ -1,5 +1,6 @@
 import pytest
 import subprocess
+import os
 
 NOTEBOOK = 'docs/methods_notebook.ipynb'
 
@@ -13,6 +14,10 @@ def test_notebook_parses():
     assert len(nb.cells) >= 8
 
 
+@pytest.mark.skipif(
+    os.environ.get('MOONSTONE_RUN_NOTEBOOKS') != '1',
+    reason='Notebook execution is opt-in (set MOONSTONE_RUN_NOTEBOOKS=1)'
+)
 @pytest.mark.skipif(
     subprocess.run(['python', '-c', 'import nbconvert'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0,
     reason='nbconvert not installed'

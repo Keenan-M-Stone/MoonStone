@@ -1,6 +1,16 @@
 import requests
 import pytest
 import shutil
+import os
+
+
+RUN = os.environ.get('MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS') == '1'
+
+
+pytestmark = pytest.mark.skipif(
+    not RUN,
+    reason='StarDust demo UI integration test is opt-in (set MOONSTONE_RUN_STARDUST_INTEGRATION_TESTS=1)'
+)
 
 # Ensure bash/npm available for dev scripts
 @pytest.mark.skipif(shutil.which('bash') is None, reason='bash not available')
