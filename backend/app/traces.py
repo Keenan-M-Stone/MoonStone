@@ -1,7 +1,8 @@
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from .models import TraceRequest, TraceResult, TracePoint
-from .geodesics import trace_flat, trace_schwarzschild_weak, trace_delayed, trace_flat_batch, trace_schwarzschild_batch
+from .geodesics import trace_flat, trace_schwarzschild_weak, trace_delayed, trace_flat_batch, trace_schwarzschild_batch, trace_static_metric_batch
 import uuid
+import json
 from typing import Dict
 
 router = APIRouter()
@@ -12,8 +13,15 @@ _TRACES: Dict[str, TraceResult] = {}
 @router.post('/trace', response_model=TraceResult)
 async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
     tid = str(uuid.uuid4())
-    metric = req.metric or {}
+    metric_in = req.metric or {}
+    # validate metric early so config errors show as 4xx (not 5xx)
+    from .metrics import validate_metric_cfg, metric_cfg_warnings
+    try:
+        metric = validate_metric_cfg(metric_in)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     mtype = metric.get('type', 'flat')
+    warnings = metric_cfg_warnings(metric)
 
     # Check disk cache first (fast interactive hits)
     from .cache import cache_get, cache_set, cache_key
@@ -27,38 +35,49 @@ async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
     if cached is not None:
         # return cached trace result quickly
         trace_points = [TracePoint(x=p[0], y=p[1], z=p[2]) for p in cached['points']]
-        res = TraceResult(id=cached.get('id', tid), points=trace_points, meta={'cached': True, 'metric': metric})
+        res = TraceResult(id=cached.get('id', tid), points=trace_points, meta={'cached': True, 'metric': metric, 'warnings': warnings})
         _TRACES[res.id] = res
         return res
 
     # Not cached: compute
     directions = [ (d.x, d.y, d.z) for d in req.directions ]
-    try:
-        # If Dask available, submit a single batched job (better for GPU-enabled workers)
-        from dask.distributed import Client
-        client = Client() if Client.scheduler_info()['address'] is None else Client()
-        # prefer GPU workers when requested
-        submit_options = {}
-        if (req.params or {}).get('device') == 'gpu':
-            submit_options['resources'] = {'GPU': 1}
+    # matrix/field tracing uses the generic static-metric integrator; keep local for now
+    if mtype in ('matrix', 'field'):
+        try:
+            results = trace_static_metric_batch((req.source.x, req.source.y, req.source.z), directions, metric, req.params or {})
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    else:
+        try:
+            # If Dask available, submit a single batched job (better for GPU-enabled workers)
+            from dask.distributed import Client
+            client = Client() if Client.scheduler_info()['address'] is None else Client()
+            # prefer GPU workers when requested
+            submit_options = {}
+            if (req.params or {}).get('device') == 'gpu':
+                submit_options['resources'] = {'GPU': 1}
 
-        if mtype == 'schwarzschild':
-            mass = metric.get('mass', 1.0)
-            fut = client.submit('app.geodesics.trace_schwarzschild_batch', (req.source.x, req.source.y, req.source.z), directions, mass, req.params or {}, **submit_options)
-        else:
-            fut = client.submit('app.geodesics.trace_flat_batch', (req.source.x, req.source.y, req.source.z), directions, req.params or {}, **submit_options)
-        results = client.gather(fut)
-        # client.gather may return the batched result directly or a list with one element depending on serialization
-        # normalize the possible wrapped result
-        if isinstance(results, list) and len(results) == 1 and isinstance(results[0], list):
-            results = results[0]
-    except Exception:
-        # fallback: local batched call
-        if mtype == 'schwarzschild':
-            mass = metric.get('mass', 1.0)
-            results = trace_schwarzschild_batch((req.source.x, req.source.y, req.source.z), directions, mass, req.params or {})
-        else:
-            results = trace_flat_batch((req.source.x, req.source.y, req.source.z), directions, req.params or {})
+            if mtype == 'schwarzschild':
+                mass = metric.get('mass', 1.0)
+                fut = client.submit('app.geodesics.trace_schwarzschild_batch', (req.source.x, req.source.y, req.source.z), directions, mass, req.params or {}, **submit_options)
+            else:
+                fut = client.submit('app.geodesics.trace_flat_batch', (req.source.x, req.source.y, req.source.z), directions, req.params or {}, **submit_options)
+            results = client.gather(fut)
+            # client.gather may return the batched result directly or a list with one element depending on serialization
+            # normalize the possible wrapped result
+            if isinstance(results, list) and len(results) == 1 and isinstance(results[0], list):
+                results = results[0]
+        except Exception:
+            # fallback: local batched call
+            if mtype == 'schwarzschild':
+                mass = metric.get('mass', 1.0)
+                results = trace_schwarzschild_batch((req.source.x, req.source.y, req.source.z), directions, mass, req.params or {})
+            else:
+                results = trace_flat_batch((req.source.x, req.source.y, req.source.z), directions, req.params or {})
 
     # record and cache
     pts_list = results[0] if results else []
@@ -79,7 +98,7 @@ async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
         except Exception:
             device_analytic_executed = False
 
-    res_meta = {'cached': False, 'num_dirs': len(req.directions), 'metric': metric, 'device_analytic_requested': device_analytic_requested, 'device_analytic_executed': device_analytic_executed}
+    res_meta = {'cached': False, 'num_dirs': len(req.directions), 'metric': metric, 'warnings': warnings, 'device_analytic_requested': device_analytic_requested, 'device_analytic_executed': device_analytic_executed}
     res = TraceResult(id=tid, points=trace_points, meta=res_meta)
     _TRACES[tid] = res
     return res
@@ -100,17 +119,35 @@ async def gpu_status():
 
 
 @router.post('/metric')
-async def get_metric_sample(point: TracePoint, metric: dict = None):
+async def get_metric_sample(point: TracePoint, metric: str | None = None):
     """Return Plebanski-style constitutive tensors at a 3D point for the requested metric."""
     # lazy import to avoid startup cost if not needed
-    from .metrics import constitutive_at
-    metric = metric or {}
+    from .metrics import constitutive_at, validate_metric_cfg, metric_cfg_warnings
+    metric_obj = {}
+    if metric is None or metric == '':
+        metric_obj = {}
+    else:
+        try:
+            metric_obj = json.loads(metric)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f'invalid metric JSON: {e}')
     pt = (point.x, point.y, point.z)
-    tensors = constitutive_at(pt, metric)
+    try:
+        metric_norm = validate_metric_cfg(metric_obj)
+        tensors = constitutive_at(pt, metric_norm)
+        warnings = metric_cfg_warnings(metric_norm)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Avoid leaking internal stack traces as 500s for user config errors.
+        raise HTTPException(status_code=400, detail=str(e))
     # serialize numpy arrays to lists
     return {
         'point': {'x': point.x, 'y': point.y, 'z': point.z},
-        'metric': metric,
+        'metric': metric_norm,
+        'warnings': warnings,
         'eps': tensors['eps'].tolist(),
         'mu': tensors['mu'].tolist(),
         'xi': tensors['xi'].tolist(),

@@ -4,6 +4,141 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def trace_static_metric_null_formal(
+    source: Tuple[float, float, float],
+    direction: Tuple[float, float, float],
+    metric_cfg: dict,
+    params: dict | None = None,
+):
+    """Integrate a null geodesic for an arbitrary *static* metric g_{μν}(x,y,z).
+
+    This path is intended for imported metric tensors (metric.type = field/matrix)
+    and uses finite differences in (x,y,z) to approximate Christoffel symbols.
+
+    Notes:
+    - Assumes ∂_t g = 0.
+    - Uses RK4 with a fixed step in affine parameter.
+    - Computes ut by solving g_{μν} u^μ u^ν = 0 given the provided spatial direction.
+    """
+    from .metrics import metric_at, validate_metric_cfg
+
+    params = params or {}
+    metric_cfg = validate_metric_cfg(metric_cfg)
+    npoints = int(params.get('npoints', 256))
+    step = float(params.get('step', 1e-6))
+    fd_step = float(params.get('fd_step', 1e-3))
+    if npoints < 2:
+        npoints = 2
+    if step <= 0:
+        raise ValueError('params.step must be positive')
+    if fd_step <= 0:
+        raise ValueError('params.fd_step must be positive')
+
+    sx, sy, sz = (float(source[0]), float(source[1]), float(source[2]))
+    vx, vy, vz = (float(direction[0]), float(direction[1]), float(direction[2]))
+    vnorm = float(np.sqrt(vx * vx + vy * vy + vz * vz)) or 1.0
+    vx /= vnorm
+    vy /= vnorm
+    vz /= vnorm
+
+    def metric_fn(p3: Tuple[float, float, float]) -> np.ndarray:
+        return metric_at(p3, metric_cfg)
+
+    def _finite_diff_metric_derivs(p3: Tuple[float, float, float], h: float) -> np.ndarray:
+        x, y, z = (float(p3[0]), float(p3[1]), float(p3[2]))
+        dg = np.zeros((3, 4, 4), dtype=float)
+        for i, dp in enumerate(((h, 0.0, 0.0), (0.0, h, 0.0), (0.0, 0.0, h))):
+            pp = (x + dp[0], y + dp[1], z + dp[2])
+            pm = (x - dp[0], y - dp[1], z - dp[2])
+            dg[i] = (metric_fn(pp) - metric_fn(pm)) / (2.0 * h)
+        return dg
+
+    def _christoffel_static(p3: Tuple[float, float, float]) -> np.ndarray:
+        g = np.asarray(metric_fn(p3), dtype=float)
+        if g.shape != (4, 4):
+            raise ValueError('metric_at must return 4x4')
+        dg_xyz = _finite_diff_metric_derivs(p3, fd_step)
+        try:
+            invg = np.linalg.inv(g)
+        except Exception:
+            invg = np.linalg.pinv(g)
+
+        def d_g(coord_index: int, a: int, b: int) -> float:
+            if coord_index == 0:
+                return 0.0
+            return float(dg_xyz[coord_index - 1, a, b])
+
+        Gamma = np.zeros((4, 4, 4), dtype=float)
+        for rho in range(4):
+            for mu in range(4):
+                for nu in range(4):
+                    s = 0.0
+                    for sigma in range(4):
+                        term = d_g(mu, sigma, nu) + d_g(nu, sigma, mu) - d_g(sigma, mu, nu)
+                        s += invg[rho, sigma] * term
+                    Gamma[rho, mu, nu] = 0.5 * s
+        return Gamma
+
+    def _initial_ut(p3: Tuple[float, float, float], ux_spatial: Tuple[float, float, float]) -> float:
+        g0 = np.asarray(metric_fn(p3), dtype=float)
+        A = float(g0[0, 0])
+        B = 2.0 * float(g0[0, 1] * ux_spatial[0] + g0[0, 2] * ux_spatial[1] + g0[0, 3] * ux_spatial[2])
+        C = float(
+            g0[1, 1] * ux_spatial[0] * ux_spatial[0]
+            + 2.0 * g0[1, 2] * ux_spatial[0] * ux_spatial[1]
+            + 2.0 * g0[1, 3] * ux_spatial[0] * ux_spatial[2]
+            + g0[2, 2] * ux_spatial[1] * ux_spatial[1]
+            + 2.0 * g0[2, 3] * ux_spatial[1] * ux_spatial[2]
+            + g0[3, 3] * ux_spatial[2] * ux_spatial[2]
+        )
+        if abs(A) < 1e-14:
+            return 1.0
+        disc = B * B - 4.0 * A * C
+        if disc < 0:
+            disc = abs(disc)
+        sqrt_disc = float(np.sqrt(disc))
+        ut1 = (-B + sqrt_disc) / (2.0 * A)
+        ut2 = (-B - sqrt_disc) / (2.0 * A)
+        ut = ut1 if ut1 > 0 else ut2
+        if not np.isfinite(ut) or ut <= 0:
+            ut = abs(ut1) if np.isfinite(ut1) else 1.0
+        return float(ut)
+
+    ut0 = _initial_ut((sx, sy, sz), (vx, vy, vz))
+    state = np.array([0.0, sx, sy, sz, ut0, vx, vy, vz], dtype=float)
+    pts = [(sx, sy, sz)]
+
+    def deriv(st: np.ndarray) -> np.ndarray:
+        _, px, py, pz, utt, uxv, uyv, uzv = st
+        Gamma = _christoffel_static((float(px), float(py), float(pz)))
+        u = np.array([utt, uxv, uyv, uzv], dtype=float)
+        a = np.zeros(4, dtype=float)
+        for mu in range(4):
+            s = 0.0
+            for a1 in range(4):
+                for b1 in range(4):
+                    s += Gamma[mu, a1, b1] * u[a1] * u[b1]
+            a[mu] = -s
+        return np.array([u[0], u[1], u[2], u[3], a[0], a[1], a[2], a[3]], dtype=float)
+
+    for _i in range(1, npoints):
+        k1 = deriv(state)
+        k2 = deriv(state + 0.5 * step * k1)
+        k3 = deriv(state + 0.5 * step * k2)
+        k4 = deriv(state + step * k3)
+        state = state + (step / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        pts.append((float(state[1]), float(state[2]), float(state[3])))
+    return pts
+
+
+def trace_static_metric_batch(source, directions, metric_cfg: dict, params: dict | None = None):
+    params = params or {}
+    results = []
+    for d in directions:
+        results.append(trace_static_metric_null_formal(source, d, metric_cfg, params))
+    return results
+
 # Module-level Kerr helpers (reuseable by CPU/GPU code and tests)
 
 def kerr_r(px, py, pz, a_local):

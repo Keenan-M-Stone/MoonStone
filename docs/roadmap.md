@@ -23,6 +23,11 @@ Phase 4 — Constitutive mapping & export
 Phase 5 — Advanced metrics & performance
 - Kerr support, JIT/GPU acceleration, caching, and batch processing.
 
+Phase 6 — Advanced authoring & astrophysics helpers (later)
+- Advanced settings dialog (keep default UI minimal; hide experimental toggles).
+- Hertzsprung–Russell (HR) diagram helper for inserting/selecting stellar masses with light sources pinned to stars and initialized with approximate spectral presets.
+- Allow emitters/observers to be “pinned” to massive objects (e.g., stars/planets/black holes): pinned = grouped/parented CAD objects so they can be moved/manipulated together (common for sources/observers inside gravity wells).
+
 ## Notes
 - Backend: Python (FastAPI) + Dask. Compute-heavy kernels can be moved to C++ or GPU using pybind11/CUDA if necessary.
 - Frontend: Vite + React + TypeScript with Three.js for 3D visualization. Real-time interactivity is prioritized.

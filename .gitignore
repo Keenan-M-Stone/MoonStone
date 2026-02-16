@@ -20,3 +20,4 @@ venv/
 # MoonStone runtime artifacts
 backend/cache/
 backend/bench_store.json
+backend/metric_fields/

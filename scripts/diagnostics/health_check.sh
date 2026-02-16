@@ -12,11 +12,13 @@ run_cmd(){
   shift
   local out="$TMPDIR/${name}.out"
   local err="$TMPDIR/${name}.err"
+  set +e
   {
     echo "--- RUN: $name ---"
     "$@"
-  } >"$out" 2>"$err" || true
+  } >"$out" 2>"$err"
   local code=$?
+  set -e
   # Build JSON without jq for portability
   local out_txt
   local err_txt

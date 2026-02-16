@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { BackendTransportProvider, StarDustApp, createFetchBackendTransport } from '@stardust/ui'
 
 import RunPanel from './RunPanel'
+import GwPolarizationEditor from './polarization/GwPolarizationEditor'
 
 const SPEED_OF_LIGHT_M_S = 299_792_458
 const SOLAR_MASS_KG = 1.98847e30
@@ -875,6 +876,16 @@ export default function App(){
               </div>
             )
           },
+
+          renderSourceEditorFields: ({ source, updateSource }) => (
+            <div style={{ marginTop: 12 }}>
+              <h4>Polarization (GW)</h4>
+              <GwPolarizationEditor
+                value={(source as any)?.polarization}
+                onChange={(next) => updateSource({ polarization: next })}
+              />
+            </div>
+          ),
         }}
       />
     </BackendTransportProvider>

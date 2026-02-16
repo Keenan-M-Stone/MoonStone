@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks
+from fastapi import HTTPException
 from .models import TracePoint
 import uuid
 import time
@@ -23,6 +24,13 @@ def submit_run(body: Dict[str, Any], background_tasks: BackgroundTasks):
     For POC we run a long-lived computation in background and store results.
     """
     rid = str(uuid.uuid4())
+
+    metric_in = body.get('metric', {}) or {}
+    if isinstance(metric_in, dict) and metric_in.get('type') in ('field', 'matrix'):
+        raise HTTPException(
+            status_code=400,
+            detail=f'metric type "{metric_in.get("type")}" is supported for /moon/metric sampling but is not yet supported for run solvers',
+        )
     run = {
         'id': rid,
         'status': 'queued',
