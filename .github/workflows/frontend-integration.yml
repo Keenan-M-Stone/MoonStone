@@ -1,0 +1,47 @@
+name: Frontend Integration (MoonStone + StarDust)
+
+on:
+  workflow_dispatch:
+    inputs:
+      stardust_repo:
+        description: 'StarDust repo in owner/name form (e.g. org/StarDust)'
+        required: false
+        default: ''
+      node_version:
+        description: 'Node.js version'
+        required: false
+        default: '18'
+
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ inputs.stardust_repo != '' }}
+    steps:
+      - name: Checkout MoonStone
+        uses: actions/checkout@v4
+        with:
+          path: MoonStone
+
+      - name: Checkout StarDust
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.stardust_repo }}
+          path: StarDust
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install and build MoonStone frontend
+        working-directory: MoonStone/frontend
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build
+
+  skipped:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.stardust_repo == '' }}
+    steps:
+      - run: echo "No stardust_repo provided; skipping."

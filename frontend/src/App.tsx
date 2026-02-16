@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { BackendTransportProvider, StarDustApp, createFetchBackendTransport } from '@stardust/ui'
 
 import RunPanel from './RunPanel'
@@ -94,6 +94,18 @@ export default function App(){
   const [advancedTensorsOpen, setAdvancedTensorsOpen] = useState(false)
   const [csvXAxisEps, setCsvXAxisEps] = useState<CsvXAxis>('wavelength_nm')
   const [csvXAxisMu, setCsvXAxisMu] = useState<CsvXAxis>('wavelength_nm')
+
+  const overlayCacheRef = useRef<null | {
+    key: string
+    world: {
+      gridLines: Array<Array<[number, number]>>
+      photons: Array<{
+        id: string
+        pts: Array<[number, number]>
+        shifts?: number[]
+      }>
+    }
+  }>(null)
 
   useEffect(() => {
     try {
@@ -229,7 +241,7 @@ export default function App(){
               if (m && typeof m.id === 'string') materialById.set(m.id, m)
             }
 
-            const masses: Array<{ x: number; y: number; m: number }> = []
+            const massesAll: Array<{ x: number; y: number; m: number }> = []
             for (const g of geoms) {
               const c = (g as any)?.center
               if (!Array.isArray(c) || c.length < 2) continue
@@ -258,12 +270,37 @@ export default function App(){
                 }
               }
 
-              if (Number.isFinite(mk) && mk > 0) masses.push({ x, y, m: mk })
+              if (Number.isFinite(mk) && mk > 0) massesAll.push({ x, y, m: mk })
             }
+
+            const pickTopMasses = (arr: Array<{ x: number; y: number; m: number }>, n: number) => {
+              if (arr.length <= n) return arr
+              const top: Array<{ x: number; y: number; m: number }> = []
+              for (const mm of arr) {
+                if (top.length < n) {
+                  top.push(mm)
+                  continue
+                }
+                let minIdx = 0
+                let minM = top[0].m
+                for (let i = 1; i < top.length; i++) {
+                  if (top[i].m < minM) {
+                    minM = top[i].m
+                    minIdx = i
+                  }
+                }
+                if (mm.m > minM) top[minIdx] = mm
+              }
+              return top
+            }
+
+            const MAX_MASSES = 64
+            const masses = pickTopMasses(massesAll, MAX_MASSES)
 
             // If no explicit masses exist, still render something stable.
             const eps2 = Math.max(1e-24, Math.pow(Math.max(safeCellSize?.[0] ?? 1, safeCellSize?.[1] ?? 1) * 0.01, 2))
-            const massScale = masses.length ? (1 / (masses.reduce((a, b) => a + b.m, 0) || 1)) : 0
+            const totalMass = masses.reduce((a, b) => a + b.m, 0) || 1
+            const massScale = masses.length ? (1 / totalMass) : 0
 
             const gradPhi = (x: number, y: number): [number, number] => {
               if (!masses.length) return [0, 0]
@@ -319,67 +356,195 @@ export default function App(){
 
             const halfW = Math.abs(Number(safeCellSize?.[0] ?? 0)) * 0.5
             const halfH = Math.abs(Number(safeCellSize?.[1] ?? 0)) * 0.5
-            const gridLines = 18
-            const samples = 40
+
+            // Hard caps to prevent zoom-out from generating pathological compute/DOM load.
+            // These overlays are best-effort visuals; stability matters more than fidelity.
+            const MAX_GRID_POINTS = 2400
+            let gridLines = 18
+            let samples = 40
+            while ((2 * (gridLines + 1) * (samples + 1)) > MAX_GRID_POINTS && samples > 12) {
+              samples = Math.max(12, Math.floor(samples * 0.75))
+            }
+            while ((2 * (gridLines + 1) * (samples + 1)) > MAX_GRID_POINTS && gridLines > 8) {
+              gridLines = Math.max(8, Math.floor(gridLines * 0.75))
+            }
 
             const warpK = 0.18 * Math.min(halfW || 1, halfH || 1)
 
+            const roundKey = (v: number) => (Number.isFinite(v) ? Number(v).toPrecision(6) : 'nan')
+
+            const srcsRaw = Array.isArray(sources) ? sources : []
+            const monsRaw = Array.isArray(monitors) ? monitors : []
+            const MAX_SOURCES = 8
+            const MAX_TARGETS = 8
+            const srcs = srcsRaw.slice(0, MAX_SOURCES)
+            const targets: Array<{ x: number; y: number }> = monsRaw
+              .map((m: any) => ({ x: Number(m?.position?.[0] ?? NaN), y: Number(m?.position?.[1] ?? NaN) }))
+              .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+              .slice(0, MAX_TARGETS)
+
+            const massesKey = masses
+              .map((mm) => `${roundKey(mm.x)}:${roundKey(mm.y)}:${roundKey(mm.m)}`)
+              .join('|')
+            const sourcesKey = srcs
+              .map((s: any) => `${String(s?.id ?? '')}:${roundKey(Number(s?.position?.[0] ?? NaN))}:${roundKey(Number(s?.position?.[1] ?? NaN))}`)
+              .join('|')
+            const targetsKey = targets.map((t) => `${roundKey(t.x)}:${roundKey(t.y)}`).join('|')
+
+            const MAX_PHOTON_PATHS = 24
+            const aimsPerSource = targets.length
+              ? Math.max(1, Math.min(targets.length, Math.floor(MAX_PHOTON_PATHS / Math.max(1, srcs.length))))
+              : 1
+            const MAX_PHOTON_SEGMENTS_TOTAL = 3200
+            const totalPathsTarget = Math.max(1, srcs.length * aimsPerSource)
+            const steps = clamp(Math.floor(MAX_PHOTON_SEGMENTS_TOTAL / totalPathsTarget), 60, 220)
+            const forceNoColorShift = (srcs.length * aimsPerSource * steps) > 1200
+            const useColorShift = Boolean(colorShiftOverlays && !forceNoColorShift)
+
+            const overlayKey = [
+              drawCurvature ? 'c1' : 'c0',
+              drawPhotons ? 'p1' : 'p0',
+              useColorShift ? 's1' : 's0',
+              recalcOnZoom ? 'z1' : 'z0',
+              `wh:${roundKey(halfW)}:${roundKey(halfH)}`,
+              `grid:${gridLines}:${samples}`,
+              `ph:${srcs.length}:${targets.length}:${aimsPerSource}:${steps}`,
+              `m:${masses.length}:${massesKey}`,
+              `src:${sourcesKey}`,
+              `tgt:${targetsKey}`,
+            ].join('~')
+
+            let world = (!recalcOnZoom && overlayCacheRef.current?.key === overlayKey)
+              ? overlayCacheRef.current.world
+              : null
+
+            if (!world) {
+              const gridLinesWorld: Array<Array<[number, number]>> = []
+              if (drawCurvature) {
+                for (let i = 0; i <= gridLines; i++) {
+                  const t = (i / gridLines)
+                  const x0 = -halfW + t * (2 * halfW)
+                  const y0 = -halfH + t * (2 * halfH)
+
+                  // vertical line at x=x0
+                  {
+                    const pts: Array<[number, number]> = []
+                    for (let j = 0; j <= samples; j++) {
+                      const s = (j / samples)
+                      const y = -halfH + s * (2 * halfH)
+                      const [gx, gy] = gradPhi(x0, y)
+                      const wx = x0 + warpK * gx
+                      const wy = y + warpK * gy
+                      pts.push([wx, wy])
+                    }
+                    gridLinesWorld.push(pts)
+                  }
+
+                  // horizontal line at y=y0
+                  {
+                    const pts: Array<[number, number]> = []
+                    for (let j = 0; j <= samples; j++) {
+                      const s = (j / samples)
+                      const x = -halfW + s * (2 * halfW)
+                      const [gx, gy] = gradPhi(x, y0)
+                      const wx = x + warpK * gx
+                      const wy = y0 + warpK * gy
+                      pts.push([wx, wy])
+                    }
+                    gridLinesWorld.push(pts)
+                  }
+                }
+              }
+
+              const photonWorld: Array<{ id: string; pts: Array<[number, number]>; shifts?: number[] }> = []
+              if (drawPhotons) {
+                for (const s of srcs) {
+                  const sx0 = Number((s as any)?.position?.[0] ?? NaN)
+                  const sy0 = Number((s as any)?.position?.[1] ?? NaN)
+                  if (!Number.isFinite(sx0) || !Number.isFinite(sy0)) continue
+
+                  const aims = targets.length
+                    ? targets.slice(0, aimsPerSource)
+                    : [{ x: sx0 + (halfW || 1), y: sy0 }]
+
+                  for (let ti = 0; ti < aims.length; ti++) {
+                    const aim = aims[ti]
+                    let dx = aim.x - sx0
+                    let dy = aim.y - sy0
+                    const d0 = Math.hypot(dx, dy) || 1
+                    dx /= d0
+                    dy /= d0
+
+                    let x = sx0
+                    let y = sy0
+                    let vx = dx
+                    let vy = dy
+
+                    const ptsWorld: Array<[number, number]> = [[x, y]]
+                    const stepLen = (Math.min(halfW || 1, halfH || 1) * 2) / steps
+                    const bendK = 0.9 * warpK
+
+                    const phi0 = phi(x, y)
+                    const shifts: number[] | undefined = useColorShift ? [] : undefined
+
+                    for (let k = 0; k < steps; k++) {
+                      const [gx, gy] = gradPhi(x, y)
+                      vx += bendK * gx
+                      vy += bendK * gy
+                      const v = Math.hypot(vx, vy) || 1
+                      vx /= v
+                      vy /= v
+
+                      const x2 = x + vx * stepLen
+                      const y2 = y + vy * stepLen
+
+                      if (useColorShift && shifts) {
+                        const am = (x + x2) * 0.5
+                        const bm = (y + y2) * 0.5
+                        const ph = phi(am, bm)
+                        const kShift = 2.4 * (warpK / (Math.min(halfW || 1, halfH || 1) || 1))
+                        const shift = clamp((ph - phi0) * kShift, -1, 1)
+                        shifts.push(shift)
+                      }
+
+                      x = x2
+                      y = y2
+
+                      if (Math.abs(x) > halfW * 1.1 || Math.abs(y) > halfH * 1.1) break
+                      ptsWorld.push([x, y])
+                    }
+
+                    if (ptsWorld.length >= 2) {
+                      photonWorld.push({
+                        id: `ph:${String((s as any)?.id ?? 's')}:${ti}`,
+                        pts: ptsWorld,
+                        shifts,
+                      })
+                    }
+                  }
+                }
+              }
+
+              world = { gridLines: gridLinesWorld, photons: photonWorld }
+              if (!recalcOnZoom) overlayCacheRef.current = { key: overlayKey, world }
+            }
+
             const gridPaths: React.ReactNode[] = []
             if (drawCurvature) {
-              for (let i = 0; i <= gridLines; i++) {
-                const t = (i / gridLines)
-                const x0 = -halfW + t * (2 * halfW)
-                const y0 = -halfH + t * (2 * halfH)
-
-                // vertical line at x=x0
-                {
-                  const pts: Array<[number, number]> = []
-                  for (let j = 0; j <= samples; j++) {
-                    const s = (j / samples)
-                    const y = -halfH + s * (2 * halfH)
-                    const [gx, gy] = gradPhi(x0, y)
-                    const wx = x0 + warpK * gx
-                    const wy = y + warpK * gy
-                    pts.push(worldToScene([wx, wy]))
-                  }
-                  const d = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')
-                  gridPaths.push(
-                    <path
-                      key={`gv:${i}`}
-                      d={d}
-                      fill="none"
-                      stroke={gridStroke}
-                      strokeWidth={strokeWidth}
-                      opacity={0.9}
-                      vectorEffect={overlayAutoscale ? undefined : 'non-scaling-stroke'}
-                    />,
-                  )
-                }
-
-                // horizontal line at y=y0
-                {
-                  const pts: Array<[number, number]> = []
-                  for (let j = 0; j <= samples; j++) {
-                    const s = (j / samples)
-                    const x = -halfW + s * (2 * halfW)
-                    const [gx, gy] = gradPhi(x, y0)
-                    const wx = x + warpK * gx
-                    const wy = y0 + warpK * gy
-                    pts.push(worldToScene([wx, wy]))
-                  }
-                  const d = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')
-                  gridPaths.push(
-                    <path
-                      key={`gh:${i}`}
-                      d={d}
-                      fill="none"
-                      stroke={gridStroke}
-                      strokeWidth={strokeWidth}
-                      opacity={0.9}
-                      vectorEffect={overlayAutoscale ? undefined : 'non-scaling-stroke'}
-                    />,
-                  )
-                }
+              for (let i = 0; i < world.gridLines.length; i++) {
+                const pts = world.gridLines[i].map((p) => worldToScene(p))
+                const d = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')
+                gridPaths.push(
+                  <path
+                    key={`g:${i}`}
+                    d={d}
+                    fill="none"
+                    stroke={gridStroke}
+                    strokeWidth={strokeWidth}
+                    opacity={0.9}
+                    vectorEffect={overlayAutoscale ? undefined : 'non-scaling-stroke'}
+                  />,
+                )
               }
             }
 
@@ -406,99 +571,42 @@ export default function App(){
 
             const photonPaths: React.ReactNode[] = []
             if (drawPhotons) {
-              const srcs = Array.isArray(sources) ? sources : []
-              const mons = Array.isArray(monitors) ? monitors : []
+              for (const tr of world.photons) {
+                if (!tr.pts.length) continue
+                if (!tr.shifts || !useColorShift) {
+                  const pts = tr.pts.map((p) => worldToScene(p))
+                  const d = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')
+                  photonPaths.push(
+                    <path
+                      key={tr.id}
+                      d={d}
+                      fill="none"
+                      stroke={photonStroke}
+                      strokeWidth={strokeWidth}
+                      opacity={0.55}
+                      vectorEffect={overlayAutoscale ? undefined : 'non-scaling-stroke'}
+                    />,
+                  )
+                  continue
+                }
 
-              const targets: Array<{ x: number; y: number }> = mons
-                .map((m: any) => ({ x: Number(m?.position?.[0] ?? NaN), y: Number(m?.position?.[1] ?? NaN) }))
-                .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
-
-              for (const s of srcs) {
-                const sx0 = Number(s?.position?.[0] ?? NaN)
-                const sy0 = Number(s?.position?.[1] ?? NaN)
-                if (!Number.isFinite(sx0) || !Number.isFinite(sy0)) continue
-
-                // If there are monitors, aim at them. Otherwise, shoot a default ray +X.
-                const aims = targets.length ? targets : [{ x: sx0 + (halfW || 1), y: sy0 }]
-
-                for (let ti = 0; ti < aims.length; ti++) {
-                  const aim = aims[ti]
-                  let dx = aim.x - sx0
-                  let dy = aim.y - sy0
-                  const d0 = Math.hypot(dx, dy) || 1
-                  dx /= d0
-                  dy /= d0
-
-                  let x = sx0
-                  let y = sy0
-                  let vx = dx
-                  let vy = dy
-
-                  const ptsWorld: Array<[number, number]> = [[x, y]]
-                  const steps = 220
-                  const stepLen = (Math.min(halfW || 1, halfH || 1) * 2) / steps
-                  const bendK = 0.9 * warpK
-
-                  const phi0 = phi(x, y)
-
-                  for (let k = 0; k < steps; k++) {
-                    const [gx, gy] = gradPhi(x, y)
-                    vx += bendK * gx
-                    vy += bendK * gy
-                    const v = Math.hypot(vx, vy) || 1
-                    vx /= v
-                    vy /= v
-
-                    x += vx * stepLen
-                    y += vy * stepLen
-
-                    if (Math.abs(x) > halfW * 1.1 || Math.abs(y) > halfH * 1.1) break
-                    ptsWorld.push([x, y])
-                  }
-
-                  if (ptsWorld.length >= 2) {
-                    if (!colorShiftOverlays) {
-                      const pts = ptsWorld.map((p) => worldToScene(p))
-                      const d = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')
-                      photonPaths.push(
-                        <path
-                          key={`ph:${String(s?.id ?? 's')}:${ti}`}
-                          d={d}
-                          fill="none"
-                          stroke={photonStroke}
-                          strokeWidth={strokeWidth}
-                          opacity={0.55}
-                          vectorEffect={overlayAutoscale ? undefined : 'non-scaling-stroke'}
-                        />,
-                      )
-                    } else {
-                      const alpha = 0.55
-                      const kShift = 2.4 * (warpK / (Math.min(halfW || 1, halfH || 1) || 1))
-                      for (let pi = 0; pi < ptsWorld.length - 1; pi++) {
-                        const aW = ptsWorld[pi]
-                        const bW = ptsWorld[pi + 1]
-                        const am = (aW[0] + bW[0]) * 0.5
-                        const bm = (aW[1] + bW[1]) * 0.5
-                        const ph = phi(am, bm)
-                        const shift = clamp((ph - phi0) * kShift, -1, 1)
-
-                        const aS = worldToScene(aW)
-                        const bS = worldToScene(bW)
-                        photonPaths.push(
-                          <line
-                            key={`phs:${String(s?.id ?? 's')}:${ti}:${pi}`}
-                            x1={aS[0]}
-                            y1={aS[1]}
-                            x2={bS[0]}
-                            y2={bS[1]}
-                            stroke={shiftColor(shift, alpha)}
-                            strokeWidth={strokeWidth}
-                            vectorEffect={overlayAutoscale ? undefined : 'non-scaling-stroke'}
-                          />,
-                        )
-                      }
-                    }
-                  }
+                const alpha = 0.55
+                for (let i = 0; i < tr.pts.length - 1; i++) {
+                  const aS = worldToScene(tr.pts[i])
+                  const bS = worldToScene(tr.pts[i + 1])
+                  const shift = tr.shifts[i] ?? 0
+                  photonPaths.push(
+                    <line
+                      key={`${tr.id}:${i}`}
+                      x1={aS[0]}
+                      y1={aS[1]}
+                      x2={bS[0]}
+                      y2={bS[1]}
+                      stroke={shiftColor(shift, alpha)}
+                      strokeWidth={strokeWidth}
+                      vectorEffect={overlayAutoscale ? undefined : 'non-scaling-stroke'}
+                    />,
+                  )
                 }
               }
             }
