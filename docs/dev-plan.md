@@ -26,21 +26,56 @@
 
 ### 5. GPU Integration for Realtime Light Mapping/Curvature
 - Assess ability to use GPU for light mapping and metric calculations (for redraw on drag, grid precision, etc.).
-- **Status:** Currently CPU-bound; no GPU integration.
-- **Best Path:** Research WebGL/WebGPU compute shaders or offload to backend; prototype for most expensive calculations.
+- **Status:** POC CUDA kernels exist on the backend (backend/app/accelerated_cuda.py) and runtime detection is already implemented via `stardust.gpu.is_cuda_available()` and `GET /moon/gpu` — GPU is selectable but not production-ready.  
+- **Best Path / Next Steps:**
+  1. Add an automated "GPU smoke" backend route that runs a tiny kernel and returns correctness + timing (safe, short-running).  
+  2. Add a dev script (MoonStone/scripts/diagnostics/gpu_check.sh) and a StarDust Admin UI card showing `is_cuda_available()` + smoke-test result.  
+  3. If smoke-test passes, prototype offloading one expensive path (metric sampling or RK4 integration) to GPU and benchmark.
+  4. Add fallbacks and feature-flagging so UX degrades to CPU when GPU unavailable.
 
 ### 6. Display Calculations for Light Trajectories
 - Show equations/results for light trajectories between observer/source pairs (effective local metrics, transformation optics, etc.).
-- **Status:** Not currently shown; only visualized.
-- **Best Path:** Add UI panel or overlay to display symbolic/numeric results for selected observer/source pairs.
+- **Status:** Visual-only today (photon overlay + color shift). Numeric/symbolic diagnostics are not exposed.
+- **Best Path:** Add a detail panel that computes and displays per-path diagnostics (time-of-flight, redshift estimate, deflection angle). Make it available from the photon overlay tooltip or selection.
 
 ### 7. Redraw Code Path Refactor & User Control
-- Replace hardcoded redraw logic with user-configurable observer pattern:
-  - Implement observer pattern with registered sinks/sources for redraw callbacks.
-  - Ensure callback order: metric curvature → light trajectories → constitutive tensors.
-  - Add settings: redraw on drag (GPU may be needed), redraw on drop (multithreaded), redraw on command (keymap, e.g. F3).
-- **Status:** Redraw is currently direct and not user-configurable.
-- **Best Path:** Refactor to observer pattern, add settings UI, and document callback order.
+- Replace hardcoded redraw logic with a configurable policy so expensive work is only performed when desired:
+  - Implement a small observer/callback registry for redraw sinks (order: metric → photons → overlays).  
+  - Add UI toggles/controls: `recalcOnZoom`, `recalcOnPan` (default: false for heavy jobs), `recalcOnDrag` (for interactive GPU-backed redraws), and a manual `Recompute` button / keybinding (suggested: F3).  
+  - Provide an explicit `overlayCacheRef` invalidation API for downstream extensions.
+- **Current behavior / viability notes:**
+  - MoonStone already caches world-space overlays (`overlayCacheRef`) and uses `recalcOnZoom` to avoid recompute on zoom; grid/photon world data is independent of pan (so panning does not require recompute).  
+  - StarDust's `renderCanvas2dOverlays` currently does NOT include `isPanning` in its ctx — adding `isPanning` (or `viewCenter`) to that ctx is a backward-compatible change that enables downstream apps to suppress expensive recompute during pan/drag.
+- **Best Path / Concrete changes:**
+  1. Extend StarDust's `renderCanvas2dOverlays` ctx to include `isPanning` and `viewCenter` (minimal API addition).  
+  2. Add `recalcOnPan` / `recalcOnDrag` toggles + manual `Recompute` button in MoonStone UI (located in `extensions.toolsExtra` of `MoonStone/frontend/src/App.tsx`).  
+  3. Implement a small redraw registry (observer pattern) in StarDust so other downstream apps can register sinks.
+
+---
++### Admin UI & Lightweight Instrumentation (NEW — high priority)
++- Goal: surface runaway/expensive work quickly and allow low-friction ops (throttle/inspect/trim).  
++- Rationale: recent hard-shutdown incident shows lack of runtime visibility; low-effort instrumentation prevents future outages.  
++- What to add (short-term):
+  - Backend: expose `/moon/admin/compute-stats` returning semaphore queue depth, active tasks, counters (requests rejected by MAX_METRIC_GRID_POINTS), and a `POST /moon/admin/prune-metric-fields` endpoint.  
+  - Frontend: reuse StarDust's existing `ResourceMonitor` and add a small `Admin / Compute` card in MoonStone (use `ResourceMonitor` + custom stats).  
+  - Metrics: simple in-process counters + short lifetime gauges (no external telemetry required initially).
++- Implementation files: 
+  - Backend: update `backend/app/traces.py` or add `backend/app/admin_api.py`; read semaphore state from `metric_fields_api` globals.  
+  - Frontend: add `Admin` panel in `MoonStone/frontend/src/App.tsx` (reuse `ResourceMonitor` from `@stardust/ui`).
++- Benefit: immediate visibility, ability to throttle or prune metric fields, and reduce operational risk.
+
++### Pruning / Storage Policy (NEW — short term)
++- Add configurable TTL or max-count cleanup for `metric_fields` storage (server-side cron or on-write pruning).  
++- Suggested defaults: max 500 entries OR 30 days TTL; expose an admin endpoint and CLI utility to force prune.
+
++---
++## Immediate recommended next steps (proposed priority)
++1. Instrumentation + Admin UI (low-effort, high value) — implement backend `/moon/admin/compute-stats` + small MoonStone admin card.  ✅ recommended
++2. Add pruning policy for `metric_fields` (prevent disk growth).  
++3. GPU availability smoke-test (run `stardust.gpu.is_cuda_available()` + small kernel) and add GPU-smoke endpoint + UI badge.  
++4. Redraw refactor (observer pattern + `isPanning` in overlay ctx) — medium effort; follow after (1)-(3).
++
++These updates will be added to the backlog and tracked as discrete PRs.
 
 ### 8. Minimize Metric Storage
 - Avoid storing metrics for Undo/Redo; recompute from baseline metric and object properties.

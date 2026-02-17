@@ -10,6 +10,11 @@ router = APIRouter()
 # in-memory store for demo
 _TRACES: Dict[str, TraceResult] = {}
 
+# Safety caps to avoid unbounded resource usage from client requests
+MAX_DIRECTIONS = 2048
+MAX_NPOINTS = 10000
+MAX_STORED_TRACES = 200
+
 @router.post('/trace', response_model=TraceResult)
 async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
     tid = str(uuid.uuid4())
@@ -23,13 +28,27 @@ async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
     mtype = metric.get('type', 'flat')
     warnings = metric_cfg_warnings(metric)
 
+    # Validate & enforce client-side caps to prevent abuse or accidental overloads.
+    n_dirs = len(req.directions) if isinstance(req.directions, list) else 0
+    if n_dirs > MAX_DIRECTIONS:
+        raise HTTPException(status_code=400, detail=f"too many directions: {n_dirs} (max {MAX_DIRECTIONS})")
+
+    # Respect an explicit npoints param if present, but clamp to a sane maximum.
+    params = req.params or {}
+    try:
+        npoints_req = int(params.get('npoints')) if params.get('npoints') is not None else None
+    except Exception:
+        npoints_req = None
+    if npoints_req is not None and (npoints_req <= 0 or npoints_req > MAX_NPOINTS):
+        raise HTTPException(status_code=400, detail=f"invalid npoints: {npoints_req} (1..{MAX_NPOINTS})")
+
     # Check disk cache first (fast interactive hits)
     from .cache import cache_get, cache_set, cache_key
     trace_req_repr = {
         'source': {'x': req.source.x, 'y': req.source.y, 'z': req.source.z},
         'directions': [ {'x': d.x, 'y': d.y, 'z': d.z} for d in req.directions ],
         'metric': metric,
-        'params': req.params or {}
+        'params': params
     }
     cached = cache_get(trace_req_repr)
     if cached is not None:
@@ -37,6 +56,11 @@ async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
         trace_points = [TracePoint(x=p[0], y=p[1], z=p[2]) for p in cached['points']]
         res = TraceResult(id=cached.get('id', tid), points=trace_points, meta={'cached': True, 'metric': metric, 'warnings': warnings})
         _TRACES[res.id] = res
+        # prune oldest traces if store grows too large
+        if len(_TRACES) > MAX_STORED_TRACES:
+            # pop oldest (insertion-ordered dict)
+            oldest_key = next(iter(_TRACES))
+            _TRACES.pop(oldest_key, None)
         return res
 
     # Not cached: compute
@@ -101,11 +125,21 @@ async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
     res_meta = {'cached': False, 'num_dirs': len(req.directions), 'metric': metric, 'warnings': warnings, 'device_analytic_requested': device_analytic_requested, 'device_analytic_executed': device_analytic_executed}
     res = TraceResult(id=tid, points=trace_points, meta=res_meta)
     _TRACES[tid] = res
+    # prune oldest traces to keep memory bounded
+    if len(_TRACES) > MAX_STORED_TRACES:
+        oldest_key = next(iter(_TRACES))
+        _TRACES.pop(oldest_key, None)
     return res
 
 @router.get('/trace/{trace_id}', response_model=TraceResult)
 async def get_trace(trace_id: str):
     return _TRACES[trace_id]
+
+@router.post('/trace/clear')
+async def clear_traces():
+    """Administrative: clear in-memory trace store."""
+    _TRACES.clear()
+    return {'status': 'ok', 'cleared': True}
 
 
 @router.get('/gpu')

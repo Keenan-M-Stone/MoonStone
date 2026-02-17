@@ -64,17 +64,19 @@ export default function RunPanel(){
         </label>
 
         <label>
-          Rays
+          Rays (max 4096)
           <input
             type="number"
             min={1}
+            max={4096}
             step={1}
             value={nDirs}
             onChange={(e) => {
               const v = e.currentTarget.valueAsNumber
-              setNDirs(Number.isFinite(v) ? Math.max(1, Math.floor(v)) : nDirs)
+              const vNorm = Number.isFinite(v) ? Math.max(1, Math.min(4096, Math.floor(v))) : nDirs
+              setNDirs(vNorm)
             }}
-            style={{ width: 90, marginLeft: 6 }}
+            style={{ width: 110, marginLeft: 6 }}
           />
         </label>
 

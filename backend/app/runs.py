@@ -18,6 +18,11 @@ router = APIRouter()
 
 _RUNS: Dict[str, Dict[str, Any]] = {}
 
+# Safety caps for submitted runs
+MAX_RUNS_STORE = 100
+MAX_RUN_DIRS = 4096
+
+
 @router.post('/run')
 def submit_run(body: Dict[str, Any], background_tasks: BackgroundTasks):
     """Submit a run job. body contains: scene, solver, params, metric, observers
@@ -39,6 +44,10 @@ def submit_run(body: Dict[str, Any], background_tasks: BackgroundTasks):
         'result': None,
     }
     _RUNS[rid] = run
+    # prune oldest runs to keep memory bounded
+    if len(_RUNS) > MAX_RUNS_STORE:
+        oldest = next(iter(_RUNS))
+        _RUNS.pop(oldest, None)
 
     def worker(rid: str):
         r = _RUNS[rid]
@@ -58,7 +67,11 @@ def submit_run(body: Dict[str, Any], background_tasks: BackgroundTasks):
                 # heavy run: sample many rays and compute tensors
                 source = body.get('source', {'x':0,'y':0,'z':0})
                 metric = body.get('metric', {'type':'schwarzschild','mass':1.0})
-                n_dirs = body.get('n_dirs', 128)
+                n_dirs = int(body.get('n_dirs', 128) or 0)
+                # enforce safety cap on number of directions
+                if n_dirs < 1 or n_dirs > MAX_RUN_DIRS:
+                    raise HTTPException(status_code=400, detail=f'n_dirs out of range (1..{MAX_RUN_DIRS})')
+
                 # generate directions on a grid (POC)
                 points = []
                 solver_method = body.get('solver_method', None)
@@ -122,3 +135,9 @@ def get_run_log(run_id: str):
     if not run:
         return {'error': 'not found'}
     return {'log': run['log'], 'status': run['status']}
+
+@router.post('/run/clear')
+def clear_runs():
+    """Administrative: clear in-memory run store."""
+    _RUNS.clear()
+    return {'status': 'ok', 'cleared': True}

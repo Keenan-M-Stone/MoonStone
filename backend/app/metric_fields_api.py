@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import uuid
 from typing import Any, Dict
+import asyncio
+from functools import partial
 
 import numpy as np
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -20,6 +22,11 @@ from .metric_fields import (
 
 
 router = APIRouter()
+
+# Safety defaults for metric/grid-heavy operations
+MAX_METRIC_GRID_POINTS = 4_000_000
+# Limit concurrent expensive metric computations to avoid CPU exhaustion
+METRIC_COMPUTE_SEMAPHORE = asyncio.Semaphore(2)
 
 
 @router.get('/metric-fields')
@@ -46,16 +53,24 @@ async def metric_field_data(field_id: str):
 
 @router.post('/metric-field/{field_id}/curvature/ricci-scalar')
 async def metric_field_curvature_ricci_scalar(field_id: str, h: float = 1e-3, force: bool = False):
-    """Compute (or load cached) Ricci scalar volume for a metric field."""
+    """Compute (or load cached) Ricci scalar volume for a metric field.
+
+    Heavy/CPU-bound work is executed in a thread executor and gated by a semaphore
+    so a client cannot accidentally spawn many concurrent expensive computations.
+    """
     try:
         from .curvature_fields import compute_ricci_scalar_volume_for_field
 
-        meta = compute_ricci_scalar_volume_for_field(
-            field_id,
-            h=float(h),
-            base_dir=METRIC_FIELD_DIR,
-            force=bool(force),
-        )
+        async with METRIC_COMPUTE_SEMAPHORE:
+            loop = asyncio.get_running_loop()
+            fn = partial(
+                compute_ricci_scalar_volume_for_field,
+                field_id,
+                h=float(h),
+                base_dir=METRIC_FIELD_DIR,
+                force=bool(force),
+            )
+            meta = await loop.run_in_executor(None, fn)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -165,22 +180,37 @@ async def metric_field_generate_weakfield(body: Dict[str, Any]):
         "field_id": "optional"
       }
     """
+    # Safety cap to avoid huge grid allocations from accidental requests
+    MAX_METRIC_GRID_POINTS = 4_000_000
+
     grid = body.get('grid', {}) if isinstance(body, dict) else {}
     origin = tuple(grid.get('origin', (0.0, 0.0, 0.0)))
     spacing = tuple(grid.get('spacing', (1.0, 1.0, 1.0)))
     shape = tuple(grid.get('shape', (32, 32, 32)))
+    # sanity-check shape
+    nx, ny, nz = int(shape[0]), int(shape[1]), int(shape[2])
+    if nx <= 0 or ny <= 0 or nz <= 0:
+        raise HTTPException(status_code=400, detail='invalid grid shape')
+    if nx * ny * nz > MAX_METRIC_GRID_POINTS:
+        raise HTTPException(status_code=400, detail=f'grid too large: {nx*ny*nz} points (max {MAX_METRIC_GRID_POINTS})')
+
     objects = body.get('objects', []) if isinstance(body, dict) else []
     softening = float(body.get('softening', 1e-6)) if isinstance(body, dict) else 1e-6
     fid = (body.get('field_id') if isinstance(body, dict) else None) or str(uuid.uuid4())
-
     try:
-        g = generate_weakfield_metric_grid(
-            origin=(float(origin[0]), float(origin[1]), float(origin[2])),
-            spacing=(float(spacing[0]), float(spacing[1]), float(spacing[2])),
-            shape=(int(shape[0]), int(shape[1]), int(shape[2])),
-            objects=objects,
-            softening=softening,
-        )
+        # Run generation in a thread executor and gate concurrency.
+        async with METRIC_COMPUTE_SEMAPHORE:
+            loop = asyncio.get_running_loop()
+            fn = partial(
+                generate_weakfield_metric_grid,
+                origin=(float(origin[0]), float(origin[1]), float(origin[2])),
+                spacing=(float(spacing[0]), float(spacing[1]), float(spacing[2])),
+                shape=(int(shape[0]), int(shape[1]), int(shape[2])),
+                objects=objects,
+                softening=softening,
+            )
+            g = await loop.run_in_executor(None, fn)
+
         meta = MetricFieldMeta(
             field_id=fid,
             origin=(float(origin[0]), float(origin[1]), float(origin[2])),
@@ -208,13 +238,21 @@ async def metric_field_generate_by_sampling(body: Dict[str, Any]):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail='body must be an object')
 
+    # Safety cap to avoid huge grid allocations
+    MAX_METRIC_GRID_POINTS = 4_000_000
+
     grid = body.get('grid', {})
     metric_cfg = body.get('metric', {})
     origin = tuple(grid.get('origin', (0.0, 0.0, 0.0)))
     spacing = tuple(grid.get('spacing', (1.0, 1.0, 1.0)))
     shape = tuple(grid.get('shape', (32, 32, 32)))
-    fid = body.get('field_id') or str(uuid.uuid4())
+    nx, ny, nz = int(shape[0]), int(shape[1]), int(shape[2])
+    if nx <= 0 or ny <= 0 or nz <= 0:
+        raise HTTPException(status_code=400, detail='invalid grid shape')
+    if nx * ny * nz > MAX_METRIC_GRID_POINTS:
+        raise HTTPException(status_code=400, detail=f'grid too large: {nx*ny*nz} points (max {MAX_METRIC_GRID_POINTS})')
 
+    fid = body.get('field_id') or str(uuid.uuid4())
     try:
         from .metrics import validate_metric_cfg, metric_at
 
@@ -222,14 +260,24 @@ async def metric_field_generate_by_sampling(body: Dict[str, Any]):
         nx, ny, nz = int(shape[0]), int(shape[1]), int(shape[2])
         ox, oy, oz = float(origin[0]), float(origin[1]), float(origin[2])
         dx, dy, dz = float(spacing[0]), float(spacing[1]), float(spacing[2])
-        g = np.zeros((nx, ny, nz, 4, 4), dtype=float)
-        for ix in range(nx):
-            x = ox + dx * ix
-            for iy in range(ny):
-                y = oy + dy * iy
-                for iz in range(nz):
-                    z = oz + dz * iz
-                    g[ix, iy, iz] = metric_at((x, y, z), metric_norm)
+
+        # Compute the grid in a thread executor under the semaphore so we don't
+        # block the server with many concurrent CPU-bound jobs.
+        async with METRIC_COMPUTE_SEMAPHORE:
+            loop = asyncio.get_running_loop()
+
+            def _compute_grid():
+                g_local = np.zeros((nx, ny, nz, 4, 4), dtype=float)
+                for ix in range(nx):
+                    x = ox + dx * ix
+                    for iy in range(ny):
+                        y = oy + dy * iy
+                        for iz in range(nz):
+                            z = oz + dz * iz
+                            g_local[ix, iy, iz] = metric_at((x, y, z), metric_norm)
+                return g_local
+
+            g = await loop.run_in_executor(None, _compute_grid)
 
         meta = MetricFieldMeta(
             field_id=fid,
