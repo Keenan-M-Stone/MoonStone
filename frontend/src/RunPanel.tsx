@@ -1,6 +1,8 @@
 import React, { useState } from 'react'
 import axios from 'axios'
 
+import { ComputeMonitor, ResourceMonitor } from '@stardust/ui'
+
 import { API_BASE } from './api'
 
 export default function RunPanel(){
@@ -13,6 +15,7 @@ export default function RunPanel(){
 
   const [benching, setBenching] = useState(false)
   const [benchData, setBenchData] = useState<any|null>(null)
+
 
   async function runBenchPanel(){
     setBenching(true)
@@ -133,6 +136,15 @@ export default function RunPanel(){
           <strong>Run:</strong> {runningId}
           <div><strong>Status:</strong> {status}</div>
           <pre style={{whiteSpace:'pre-wrap'}}>{log.join('\n')}</pre>
+
+          <div style={{ marginTop: 10 }}>
+            <strong>Resource monitor</strong>
+            <div style={{ marginTop: 6 }}>
+              <ResourceMonitor runId={runningId} />
+            </div>
+          </div>
+
+          <ComputeMonitor apiBaseUrl={API_BASE} basePath="/moon" pollMs={2500} />
         </div>
       )}
     </div>

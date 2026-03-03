@@ -3,12 +3,54 @@ import { BackendTransportProvider, StarDustApp, createFetchBackendTransport } fr
 
 import RunPanel from './RunPanel'
 import GwPolarizationEditor from './polarization/GwPolarizationEditor'
+import MetricViewportPanel from './moonstone/MetricViewportPanel'
+import ObserverClocksPanel from './moonstone/ObserverClocksPanel'
 
 const SPEED_OF_LIGHT_M_S = 299_792_458
+const G_SI = 6.67430e-11
 const SOLAR_MASS_KG = 1.98847e30
 const LY_M = 9.4607304725808e15
 const MLY_M = LY_M * 1e6
 type CsvXAxis = 'frequency_hz' | 'wavelength_m' | 'wavelength_um' | 'wavelength_nm'
+
+type MassBody = { x: number; y: number; massKg: number; softeningM: number }
+
+function clamp(v: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, v))
+}
+
+function extractMassBodies(geometry: any[], materials: any[]): MassBody[] {
+  const mats = new Map<string, any>()
+  for (const m of (materials || [])) mats.set(String(m?.id ?? ''), m)
+  const out: MassBody[] = []
+  for (const g of (geometry || [])) {
+    const mat = mats.get(String(g?.materialId ?? ''))
+    const massKg = Number(mat?.payload?.massKg ?? NaN)
+    if (!Number.isFinite(massKg) || massKg <= 0) continue
+
+    const cx = Number(g?.center?.[0] ?? NaN)
+    const cy = Number(g?.center?.[1] ?? NaN)
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue
+
+    const size0 = Number(g?.size?.[0] ?? NaN)
+    const size1 = Number(g?.size?.[1] ?? NaN)
+    const r = Number.isFinite(size0) ? Math.abs(size0) : Number.isFinite(size1) ? Math.abs(size1) : 0
+    const softeningM = clamp(r || 0, 1.0, 1e30)
+    out.push({ x: cx, y: cy, massKg, softeningM })
+  }
+  return out
+}
+
+function phiWeak(x: number, y: number, bodies: MassBody[]): number {
+  let phi = 0
+  for (const b of bodies) {
+    const dx = x - b.x
+    const dy = y - b.y
+    const r = Math.max(Math.hypot(dx, dy), b.softeningM)
+    phi += (-G_SI * b.massKg) / r
+  }
+  return phi
+}
 
 const MOONSTONE_DEFAULT_MATERIALS: any[] = [
   { id: 'vac', label: 'Vacuum', color: '#94a3b8' },
@@ -83,6 +125,8 @@ export default function App(){
   const [showPhotonOverlays, setShowPhotonOverlays] = useState(false)
   const [colorShiftOverlays, setColorShiftOverlays] = useState(true)
   const [recalcOnZoom, setRecalcOnZoom] = useState(false)
+  const [recomputeToken, setRecomputeToken] = useState(0)
+  const [spacetimeUpdateMode, setSpacetimeUpdateMode] = useState<'drag' | 'drop' | 'refresh'>('drop')
   const [backendMode, setBackendMode] = useState<'realtime' | 'backend'>(() => {
     try {
       const v = window.localStorage.getItem('moonstone.computeMode')
@@ -190,9 +234,35 @@ export default function App(){
                 Recompute on zoom (higher precision)
               </label>
 
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'rgba(148,163,184,0.9)' }}>Update mode</span>
+                  <select value={spacetimeUpdateMode} onChange={(e) => setSpacetimeUpdateMode(e.target.value as any)}>
+                    <option value="drag">On drag</option>
+                    <option value="drop">On drop</option>
+                    <option value="refresh">On refresh</option>
+                  </select>
+                </label>
+                <button
+                  onClick={() => setRecomputeToken((t) => t + 1)}
+                  disabled={!(spacetimePreview || showPhotonOverlays)}
+                >
+                  Refresh spacetime viewport
+                </button>
+                <span style={{ fontSize: 12, color: 'rgba(148,163,184,0.9)' }}>
+                  {spacetimeUpdateMode === 'drag'
+                    ? 'Recomputes continuously while interacting.'
+                    : spacetimeUpdateMode === 'drop'
+                      ? 'Paused while interacting; recomputes on drop.'
+                      : 'Paused while interacting; refresh recomputes.'}
+                </span>
+              </div>
+
               {backendMode === 'backend' ? (
                 <RunPanel />
               ) : null}
+
+              <ObserverClocksPanel />
             </>
           ),
           layoutPresets: [
@@ -214,6 +284,48 @@ export default function App(){
               setShowPhotonOverlays(true)
             }
           },
+
+          renderCadSectionPanel: ({
+            safeViewBox,
+            toScene,
+            safeCellSize,
+            geometry,
+            materials,
+            sources,
+            monitors,
+            displayUnits,
+            displayMassUnits,
+            displayVelocityUnits,
+            isMoveActive,
+            isPanning,
+          }) => {
+            const enabled = Boolean(spacetimePreview || showPhotonOverlays)
+            if (!enabled) return null
+            return (
+              <MetricViewportPanel
+                enabled={enabled}
+                updateMode={spacetimeUpdateMode}
+                safeViewBox={safeViewBox}
+                toScene={toScene}
+                safeCellSize={safeCellSize}
+                geometry={geometry}
+                materials={materials}
+                sources={sources}
+                monitors={monitors}
+                displayUnits={displayUnits}
+                displayMassUnits={displayMassUnits}
+                displayVelocityUnits={displayVelocityUnits}
+                isMoveActive={isMoveActive}
+                isPanning={isPanning}
+                drawCurvature={spacetimePreview}
+                drawPhotons={showPhotonOverlays}
+                colorShiftOverlays={colorShiftOverlays}
+                recalcOnZoom={recalcOnZoom}
+                recomputeToken={recomputeToken}
+              />
+            )
+          },
+
           renderCanvas2dOverlays: ({
             toScene,
             sources,
@@ -228,6 +340,11 @@ export default function App(){
             safeCellSize,
             plane2dActive,
           }) => {
+            // MoonStone now renders curvature grid + photon trajectories in a separate
+            // section viewport pane. Keep the main CAD canvas lightweight to avoid
+            // recompute storms/crashes during interactive edits.
+            if (spacetimePreview || showPhotonOverlays) return null
+
             const drawCurvature = spacetimePreview
             const drawPhotons = showPhotonOverlays
             if (!drawCurvature && !drawPhotons) return null
@@ -994,6 +1111,32 @@ export default function App(){
               />
             </div>
           ),
+
+          computeMeasureSegments: ({ points, geometry, materials }) => {
+            const bodies = extractMassBodies(geometry || [], materials || [])
+            const seg: number[] = []
+            for (let i = 0; i < points.length - 1; i++) {
+              const a = points[i]
+              const b = points[i + 1]
+              const dl = Math.hypot(b[0] - a[0], b[1] - a[1])
+              const mx = 0.5 * (a[0] + b[0])
+              const my = 0.5 * (a[1] + b[1])
+              const phi = phiWeak(mx, my, bodies)
+
+              // Weak-field spatial stretching (very rough): dl_proper ≈ (1 - φ/c^2) dl
+              const k = 1 - phi / (SPEED_OF_LIGHT_M_S * SPEED_OF_LIGHT_M_S)
+              const kClamped = clamp(k, 0.0, 10.0)
+              seg.push(dl * kClamped)
+            }
+            return {
+              segments: seg,
+              labels: {
+                totalPrefix: 'Σ proper',
+                displacementPrefix: 'Δ coord',
+                avgStdPrefix: 'μ proper',
+              },
+            }
+          },
         }}
       />
     </BackendTransportProvider>

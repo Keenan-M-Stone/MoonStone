@@ -53,6 +53,13 @@ def submit_run(body: Dict[str, Any], background_tasks: BackgroundTasks):
         r = _RUNS[rid]
         r['status'] = 'running'
         r['log'].append('Started run')
+        # Start resource sampling for StarDust-style ResourceMonitor.
+        try:
+            from .resource_monitor import start_run_sampler
+
+            start_run_sampler(rid)
+        except Exception:
+            pass
         # choose a solver
         solver = body.get('solver', 'reference')
         # simulate work: either run many trace directions or sleep
@@ -121,9 +128,17 @@ def submit_run(body: Dict[str, Any], background_tasks: BackgroundTasks):
         except Exception as e:
             r['status'] = 'failed'
             r['log'].append(f'Error: {e}')
+        finally:
+            try:
+                from .resource_monitor import stop_run_sampler
+
+                stop_run_sampler(rid)
+            except Exception:
+                pass
 
     background_tasks.add_task(worker, rid)
     return {'run_id': rid}
+
 
 @router.get('/run/{run_id}')
 def get_run(run_id: str):

@@ -22,6 +22,8 @@ from pathlib import Path
 import shutil
 from typing import Any, Dict, Iterable, Tuple
 
+import time
+
 import numpy as np
 
 
@@ -34,6 +36,135 @@ def _default_metric_field_dir() -> Path:
 
 
 METRIC_FIELD_DIR = _default_metric_field_dir()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return int(default)
+
+
+def _metric_field_limits() -> tuple[int, int]:
+    # Defaults are intentionally conservative; override via env vars.
+    max_fields = _env_int('MOONSTONE_METRIC_FIELD_MAX_FIELDS', 25)
+    max_bytes = _env_int('MOONSTONE_METRIC_FIELD_MAX_BYTES', 2_500_000_000)
+    return max_fields, max_bytes
+
+
+def _dir_size_bytes(p: Path) -> int:
+    total = 0
+    try:
+        for f in p.rglob('*'):
+            if f.is_file():
+                try:
+                    total += int(f.stat().st_size)
+                except Exception:
+                    continue
+    except Exception:
+        return 0
+    return total
+
+
+def prune_metric_fields(
+    *,
+    base_dir: Path | None = None,
+    max_fields: int | None = None,
+    max_bytes: int | None = None,
+) -> Dict[str, Any]:
+    """Prune metric-field directories to enforce disk budget.
+
+    Strategy: approximate LRU using directory mtime, deleting oldest first.
+    """
+    bd = base_dir or METRIC_FIELD_DIR
+    bd.mkdir(parents=True, exist_ok=True)
+    def_max_fields, def_max_bytes = _metric_field_limits()
+    max_fields = int(def_max_fields if max_fields is None else max_fields)
+    max_bytes = int(def_max_bytes if max_bytes is None else max_bytes)
+
+    entries: list[tuple[Path, float, int]] = []
+    total_bytes = 0
+    for p in bd.iterdir():
+        if not p.is_dir():
+            continue
+        if not (p / 'meta.json').exists() or not (p / 'data.npz').exists():
+            continue
+        try:
+            # Use directory mtime; callers may touch meta/data to keep active.
+            mtime = float(p.stat().st_mtime)
+        except Exception:
+            mtime = time.time()
+        size = _dir_size_bytes(p)
+        entries.append((p, mtime, size))
+        total_bytes += int(size)
+
+    entries.sort(key=lambda x: x[1])
+    removed = 0
+    removed_bytes = 0
+
+    def needs_prune() -> bool:
+        return (max_fields > 0 and len(entries) > max_fields) or (max_bytes > 0 and total_bytes > max_bytes)
+
+    while entries and needs_prune():
+        p, _, sz = entries.pop(0)
+        try:
+            shutil.rmtree(p, ignore_errors=True)
+            removed += 1
+            removed_bytes += int(sz)
+            total_bytes -= int(sz)
+        except Exception:
+            continue
+
+    summary = {
+        'status': 'ok',
+        'removed': removed,
+        'removed_bytes': removed_bytes,
+        'remaining_fields': len(entries),
+        'remaining_bytes': total_bytes,
+        'max_fields': max_fields,
+        'max_bytes': max_bytes,
+    }
+
+    global _LAST_PRUNE_SUMMARY
+    _LAST_PRUNE_SUMMARY = summary
+    return summary
+
+
+_LAST_PRUNE_SUMMARY: Dict[str, Any] | None = None
+
+
+def metric_fields_last_prune() -> Dict[str, Any] | None:
+    return _LAST_PRUNE_SUMMARY
+
+
+def metric_fields_status(*, base_dir: Path | None = None) -> Dict[str, Any]:
+    bd = base_dir or METRIC_FIELD_DIR
+    bd.mkdir(parents=True, exist_ok=True)
+    max_fields, max_bytes = _metric_field_limits()
+
+    entries: list[tuple[Path, float, int]] = []
+    total_bytes = 0
+    for p in bd.iterdir():
+        if not p.is_dir():
+            continue
+        if not (p / 'meta.json').exists() or not (p / 'data.npz').exists():
+            continue
+        try:
+            mtime = float(p.stat().st_mtime)
+        except Exception:
+            mtime = time.time()
+        size = _dir_size_bytes(p)
+        entries.append((p, mtime, size))
+        total_bytes += int(size)
+
+    return {
+        'status': 'ok',
+        'base_dir': str(bd),
+        'fields': int(len(entries)),
+        'bytes': int(total_bytes),
+        'max_fields': int(max_fields),
+        'max_bytes': int(max_bytes),
+    }
 
 
 @dataclass(frozen=True)
@@ -106,6 +237,11 @@ def save_metric_field(
     with meta_path.open('w') as fh:
         json.dump(meta.to_dict(), fh, indent=2)
     np.savez_compressed(data_path, g=g)
+    # Automatic pruning (best-effort) to keep disk bounded.
+    try:
+        prune_metric_fields(base_dir=base_dir)
+    except Exception:
+        pass
     return p
 
 

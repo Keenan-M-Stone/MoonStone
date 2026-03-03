@@ -152,6 +152,58 @@ async def gpu_status():
         return {'cuda': False}
 
 
+@router.get('/gpu/smoke')
+async def gpu_smoke():
+    """Run a tiny CUDA smoke test (best-effort).
+
+    Returns quickly and never raises, so UIs can poll safely.
+    """
+    import time
+    try:
+        from . import accelerated_cuda
+        if not getattr(accelerated_cuda, 'NUMBA_CUDA_OK', False):
+            return {'cuda': False, 'ok': False, 'detail': 'numba cuda not available'}
+
+        import numpy as np
+
+        sources = np.array([[0.0, 0.0, 0.0]], dtype=float)
+        dirs = np.array([[1.0, 0.0, 0.0]], dtype=float)
+        params = {'npoints': 16, 'step': 1e-3}
+
+        t0 = time.time()
+        pts = accelerated_cuda.trace_flat_gpu(sources, dirs, params)[0]
+        t1 = time.time()
+
+        ok = bool(len(pts) == int(params['npoints']))
+        if ok:
+            # basic sanity: x should increase linearly and y,z ~ 0
+            for j, p in enumerate(pts[:5]):
+                if abs(float(p[1])) > 1e-8 or abs(float(p[2])) > 1e-8:
+                    ok = False
+                    break
+                exp_x = float(j) * float(params['step'])
+                if abs(float(p[0]) - exp_x) > 1e-6:
+                    ok = False
+                    break
+
+        device_name = None
+        try:
+            from numba import cuda  # type: ignore
+
+            device_name = str(cuda.get_current_device().name)
+        except Exception:
+            device_name = None
+
+        return {
+            'cuda': True,
+            'ok': ok,
+            'device': device_name,
+            'elapsed_ms': (t1 - t0) * 1000.0,
+        }
+    except Exception as e:
+        return {'cuda': False, 'ok': False, 'detail': str(e)}
+
+
 @router.post('/metric')
 async def get_metric_sample(point: TracePoint, metric: str | None = None):
     """Return Plebanski-style constitutive tensors at a 3D point for the requested metric."""

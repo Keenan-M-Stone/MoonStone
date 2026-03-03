@@ -9,6 +9,7 @@ from functools import partial
 import numpy as np
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from contextlib import asynccontextmanager
 
 from .metric_fields import (
     METRIC_FIELD_DIR,
@@ -27,6 +28,63 @@ router = APIRouter()
 MAX_METRIC_GRID_POINTS = 4_000_000
 # Limit concurrent expensive metric computations to avoid CPU exhaustion
 METRIC_COMPUTE_SEMAPHORE = asyncio.Semaphore(2)
+
+# Lightweight instrumentation (in-process)
+METRIC_COMPUTE_ACTIVE = 0
+METRIC_COMPUTE_TOTAL = 0
+METRIC_COMPUTE_REJECT_GRID_TOO_LARGE = 0
+METRIC_COMPUTE_REJECT_OTHER = 0
+
+
+def metric_compute_stats() -> Dict[str, Any]:
+    sem = METRIC_COMPUTE_SEMAPHORE
+    max_concurrency = 2
+    try:
+        max_concurrency = int(getattr(sem, '_value', 2)) + int(len(getattr(sem, '_waiters', []) or []))
+        # The above isn't a true max; keep a sane fallback.
+        if max_concurrency <= 0:
+            max_concurrency = 2
+    except Exception:
+        max_concurrency = 2
+
+    try:
+        value = int(getattr(sem, '_value', 0))
+    except Exception:
+        value = None
+    try:
+        waiters = len(getattr(sem, '_waiters', []) or [])
+    except Exception:
+        waiters = None
+
+    return {
+        'status': 'ok',
+        'semaphore': {
+            'value': value,
+            'waiters': waiters,
+            'max_concurrency_hint': int(max_concurrency),
+        },
+        'active': int(METRIC_COMPUTE_ACTIVE),
+        'total': int(METRIC_COMPUTE_TOTAL),
+        'rejects': {
+            'grid_too_large': int(METRIC_COMPUTE_REJECT_GRID_TOO_LARGE),
+            'other': int(METRIC_COMPUTE_REJECT_OTHER),
+        },
+        'limits': {
+            'max_metric_grid_points': int(MAX_METRIC_GRID_POINTS),
+        },
+    }
+
+
+@asynccontextmanager
+async def _instrumented_metric_compute():
+    global METRIC_COMPUTE_ACTIVE, METRIC_COMPUTE_TOTAL
+    async with METRIC_COMPUTE_SEMAPHORE:
+        METRIC_COMPUTE_ACTIVE += 1
+        METRIC_COMPUTE_TOTAL += 1
+        try:
+            yield
+        finally:
+            METRIC_COMPUTE_ACTIVE = max(0, METRIC_COMPUTE_ACTIVE - 1)
 
 
 @router.get('/metric-fields')
@@ -61,7 +119,7 @@ async def metric_field_curvature_ricci_scalar(field_id: str, h: float = 1e-3, fo
     try:
         from .curvature_fields import compute_ricci_scalar_volume_for_field
 
-        async with METRIC_COMPUTE_SEMAPHORE:
+        async with _instrumented_metric_compute():
             loop = asyncio.get_running_loop()
             fn = partial(
                 compute_ricci_scalar_volume_for_field,
@@ -192,6 +250,8 @@ async def metric_field_generate_weakfield(body: Dict[str, Any]):
     if nx <= 0 or ny <= 0 or nz <= 0:
         raise HTTPException(status_code=400, detail='invalid grid shape')
     if nx * ny * nz > MAX_METRIC_GRID_POINTS:
+        global METRIC_COMPUTE_REJECT_GRID_TOO_LARGE
+        METRIC_COMPUTE_REJECT_GRID_TOO_LARGE += 1
         raise HTTPException(status_code=400, detail=f'grid too large: {nx*ny*nz} points (max {MAX_METRIC_GRID_POINTS})')
 
     objects = body.get('objects', []) if isinstance(body, dict) else []
@@ -199,7 +259,7 @@ async def metric_field_generate_weakfield(body: Dict[str, Any]):
     fid = (body.get('field_id') if isinstance(body, dict) else None) or str(uuid.uuid4())
     try:
         # Run generation in a thread executor and gate concurrency.
-        async with METRIC_COMPUTE_SEMAPHORE:
+        async with _instrumented_metric_compute():
             loop = asyncio.get_running_loop()
             fn = partial(
                 generate_weakfield_metric_grid,
@@ -219,6 +279,8 @@ async def metric_field_generate_weakfield(body: Dict[str, Any]):
         )
         save_metric_field(fid, meta, g)
     except Exception as e:
+        global METRIC_COMPUTE_REJECT_OTHER
+        METRIC_COMPUTE_REJECT_OTHER += 1
         raise HTTPException(status_code=400, detail=str(e))
 
     return {'id': fid, 'meta': meta.to_dict()}
@@ -250,6 +312,8 @@ async def metric_field_generate_by_sampling(body: Dict[str, Any]):
     if nx <= 0 or ny <= 0 or nz <= 0:
         raise HTTPException(status_code=400, detail='invalid grid shape')
     if nx * ny * nz > MAX_METRIC_GRID_POINTS:
+        global METRIC_COMPUTE_REJECT_GRID_TOO_LARGE
+        METRIC_COMPUTE_REJECT_GRID_TOO_LARGE += 1
         raise HTTPException(status_code=400, detail=f'grid too large: {nx*ny*nz} points (max {MAX_METRIC_GRID_POINTS})')
 
     fid = body.get('field_id') or str(uuid.uuid4())
@@ -263,7 +327,7 @@ async def metric_field_generate_by_sampling(body: Dict[str, Any]):
 
         # Compute the grid in a thread executor under the semaphore so we don't
         # block the server with many concurrent CPU-bound jobs.
-        async with METRIC_COMPUTE_SEMAPHORE:
+        async with _instrumented_metric_compute():
             loop = asyncio.get_running_loop()
 
             def _compute_grid():
@@ -287,6 +351,8 @@ async def metric_field_generate_by_sampling(body: Dict[str, Any]):
         )
         save_metric_field(fid, meta, g)
     except Exception as e:
+        global METRIC_COMPUTE_REJECT_OTHER
+        METRIC_COMPUTE_REJECT_OTHER += 1
         raise HTTPException(status_code=400, detail=str(e))
 
     return {'id': fid, 'meta': meta.to_dict(), 'metric': metric_norm}

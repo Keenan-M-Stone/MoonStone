@@ -5,6 +5,8 @@ from .runs import router as runs_router
 from .metric_fields_api import router as metric_fields_router
 from .metric_registry_api import router as metric_registry_router
 from .curvature_api import router as curvature_router
+from .compat_metrics_api import router as compat_metrics_router
+from .compute_api import router as compute_router
 
 app = FastAPI(title="MoonStone Trace Service")
 
@@ -22,7 +24,12 @@ app.include_router(metric_registry_router, prefix="/moon")
 app.include_router(curvature_router, prefix="/moon")
 from .scenes import router as scenes_router
 app.include_router(scenes_router, prefix="/moon")
+app.include_router(compute_router, prefix="/moon")
+
+# Root-level compatibility endpoints for StarDust UI components (ResourceMonitor).
+app.include_router(compat_metrics_router)
 
 @app.get("/")
 def root():
     return {"status": "ok", "service": "MoonStone trace service"}
+

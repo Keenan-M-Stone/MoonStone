@@ -19,7 +19,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from .curvature import ricci_scalar_static
-from .metric_fields import MetricFieldMeta, load_metric_field, sample_metric_field
+from .metric_fields import MetricFieldMeta, load_metric_field, sample_metric_field, prune_metric_fields
 
 
 @dataclass(frozen=True)
@@ -136,6 +136,12 @@ def compute_ricci_scalar_volume_for_field(
     np.savez_compressed(data_path, R=R)
     with meta_path.open('w') as fh:
         json.dump(meta_out.to_dict(), fh, indent=2)
+
+    # Best-effort prune to keep derived artifacts from growing disk unbounded.
+    try:
+        prune_metric_fields(base_dir=base_dir)
+    except Exception:
+        pass
 
     return meta_out
 
