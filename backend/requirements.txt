@@ -1,6 +1,7 @@
 fastapi==0.95.2
 uvicorn[standard]==0.22.0
 pydantic==1.10.11
+python-multipart>=0.0.9
 
 # NumPy/SciPy wheels are Python-version sensitive.
 numpy==1.26.4; python_version < '3.13'
