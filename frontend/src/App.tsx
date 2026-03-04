@@ -11,6 +11,7 @@ const G_SI = 6.67430e-11
 const SOLAR_MASS_KG = 1.98847e30
 const LY_M = 9.4607304725808e15
 const MLY_M = LY_M * 1e6
+const MAX_OVERLAY_HALF_EXTENT = 1e9
 type CsvXAxis = 'frequency_hz' | 'wavelength_m' | 'wavelength_um' | 'wavelength_nm'
 
 type MassBody = { x: number; y: number; massKg: number; softeningM: number }
@@ -181,11 +182,15 @@ export default function App(){
           monitors: MOONSTONE_DEFAULT_SCENE.monitors,
         }}
         initialDisplayUnits="MLY"
+        storageNamespace="moonstone"
+        autoFrameOnInit={false}
         materialEditor={{
           showExtraJson: false,
         }}
         cad2d={{
           showBaseGrid: !spacetimePreview,
+          disableWheelZoom: true,
+          alwaysShowZoomHud: true,
         }}
         extensions={{
           toolsExtra: (
@@ -471,8 +476,8 @@ export default function App(){
             const photonStroke = 'rgba(34,211,238,0.85)'
             const strokeWidth = Math.max(overlayStrokeWidth, overlayStrokeWidth * 0.9)
 
-            const halfW = Math.abs(Number(safeCellSize?.[0] ?? 0)) * 0.5
-            const halfH = Math.abs(Number(safeCellSize?.[1] ?? 0)) * 0.5
+            const halfW = Math.min(Math.abs(Number(safeCellSize?.[0] ?? 0)) * 0.5, MAX_OVERLAY_HALF_EXTENT)
+            const halfH = Math.min(Math.abs(Number(safeCellSize?.[1] ?? 0)) * 0.5, MAX_OVERLAY_HALF_EXTENT)
 
             // Hard caps to prevent zoom-out from generating pathological compute/DOM load.
             // These overlays are best-effort visuals; stability matters more than fidelity.
@@ -667,8 +672,8 @@ export default function App(){
 
             const legend: React.ReactNode[] = []
             if (drawCurvature || drawPhotons) {
-              const halfW = Math.abs(Number(safeCellSize?.[0] ?? 0)) * 0.5
-              const halfH = Math.abs(Number(safeCellSize?.[1] ?? 0)) * 0.5
+              const halfW = Math.min(Math.abs(Number(safeCellSize?.[0] ?? 0)) * 0.5, MAX_OVERLAY_HALF_EXTENT)
+              const halfH = Math.min(Math.abs(Number(safeCellSize?.[1] ?? 0)) * 0.5, MAX_OVERLAY_HALF_EXTENT)
               const x = toScene(-halfW * 0.98)
               const y = toScene(-halfH * 0.92)
               const massSuffix = displayMassUnits === 'Msun' ? 'M☉' : 'kg'
