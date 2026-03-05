@@ -1,4 +1,4 @@
-import { SpecialObject } from "@stardust/ui";
+import { SpecialObject } from '../stardust'
 
 export class Observer extends SpecialObject {
   constructor(init: { id: string; position: [number, number]; z?: number; label?: string }) {

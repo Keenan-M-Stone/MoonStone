@@ -1,7 +1,8 @@
 Scripts in this directory
 
 - dev-up.sh: Start backend/frontend and optional local dask scheduler/worker. Writes PIDs to `scripts/pids/` and logs to `logs/`.
-- dev-down.sh: Stop processes started by `dev-up.sh` (uses pidfiles and pkill fallback).
+- dev-down.sh: Stop MoonStone processes started by `dev-up.sh` (uses pidfiles and targeted port fallback).
+- dev-status.sh: Show backend/frontend/dask status from pidfiles and log locations.
 
 Diagnostics:
 - diagnostics/env_check.sh: checks Python, Node, and CUDA helpers and prints status.
@@ -13,4 +14,11 @@ Usage:
 - Make scripts executable: `chmod +x scripts/*.sh scripts/diagnostics/*.sh`
 - Start dev environment: `scripts/dev-up.sh`
 - Stop dev environment: `scripts/dev-down.sh`
+- Show status: `scripts/dev-status.sh`
 - Run quick checks: `scripts/diagnostics/env_check.sh`
+
+Optional environment flags:
+- `MOONSTONE_SKIP_BACKEND=1` — start frontend only (useful with remote backend).
+- `MOONSTONE_API_BASE_URL=http://host:8000` — set API base URL passed to frontend (`VITE_API_BASE`).
+- `MOONSTONE_NO_OPEN=1` — do not auto-open browser.
+- `MOONSTONE_DEV_DOWN_AGGRESSIVE=1` — also run aggressive process cleanup by repo path.

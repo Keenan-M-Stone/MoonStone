@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import axios from 'axios'
 
-import { ComputeMonitor, ResourceMonitor } from '@stardust/ui'
+import { ComputeMonitor, ResourceMonitor } from './stardust'
 
 import { API_BASE } from './api'
 

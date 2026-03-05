@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { BackendTransportProvider, StarDustApp, createFetchBackendTransport } from '@stardust/ui'
+import { BackendTransportProvider, StarDustApp, createFetchBackendTransport } from './stardust'
 
 import RunPanel from './RunPanel'
 import GwPolarizationEditor from './polarization/GwPolarizationEditor'
@@ -15,6 +15,29 @@ const MAX_OVERLAY_HALF_EXTENT = 1e9
 type CsvXAxis = 'frequency_hz' | 'wavelength_m' | 'wavelength_um' | 'wavelength_nm'
 
 type MassBody = { x: number; y: number; massKg: number; softeningM: number }
+
+class ExtensionErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback?: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; fallback?: React.ReactNode }) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('MoonStone extension panel crashed', error)
+  }
+
+  render() {
+    if (this.state.hasError) return this.props.fallback ?? null
+    return this.props.children
+  }
+}
 
 function clamp(v: number, a: number, b: number) {
   return Math.max(a, Math.min(b, v))
@@ -183,7 +206,7 @@ export default function App(){
         }}
         initialDisplayUnits="MLY"
         storageNamespace="moonstone"
-        autoFrameOnInit={false}
+        autoFrameOnInit={true}
         materialEditor={{
           showExtraJson: false,
         }}
@@ -307,27 +330,29 @@ export default function App(){
             const enabled = Boolean(spacetimePreview || showPhotonOverlays)
             if (!enabled) return null
             return (
-              <MetricViewportPanel
-                enabled={enabled}
-                updateMode={spacetimeUpdateMode}
-                safeViewBox={safeViewBox}
-                toScene={toScene}
-                safeCellSize={safeCellSize}
-                geometry={geometry}
-                materials={materials}
-                sources={sources}
-                monitors={monitors}
-                displayUnits={displayUnits}
-                displayMassUnits={displayMassUnits}
-                displayVelocityUnits={displayVelocityUnits}
-                isMoveActive={isMoveActive}
-                isPanning={isPanning}
-                drawCurvature={spacetimePreview}
-                drawPhotons={showPhotonOverlays}
-                colorShiftOverlays={colorShiftOverlays}
-                recalcOnZoom={recalcOnZoom}
-                recomputeToken={recomputeToken}
-              />
+              <ExtensionErrorBoundary>
+                <MetricViewportPanel
+                  enabled={enabled}
+                  updateMode={spacetimeUpdateMode}
+                  safeViewBox={safeViewBox}
+                  toScene={toScene}
+                  safeCellSize={safeCellSize}
+                  geometry={geometry}
+                  materials={materials}
+                  sources={sources}
+                  monitors={monitors}
+                  displayUnits={displayUnits}
+                  displayMassUnits={displayMassUnits}
+                  displayVelocityUnits={displayVelocityUnits}
+                  isMoveActive={isMoveActive}
+                  isPanning={isPanning}
+                  drawCurvature={spacetimePreview}
+                  drawPhotons={showPhotonOverlays}
+                  colorShiftOverlays={colorShiftOverlays}
+                  recalcOnZoom={recalcOnZoom}
+                  recomputeToken={recomputeToken}
+                />
+              </ExtensionErrorBoundary>
             )
           },
 

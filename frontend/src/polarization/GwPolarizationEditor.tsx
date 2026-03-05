@@ -4,7 +4,7 @@ import {
   type PolarizationPreset,
   type PolarizationEditorProps,
   type SourcePolarization,
-} from '@stardust/ui'
+} from '../stardust'
 
 export type GwPolarizationEditorProps = Omit<
   PolarizationEditorProps,
