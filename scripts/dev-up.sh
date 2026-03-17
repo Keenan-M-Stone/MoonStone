@@ -1,12 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPTS_DIR="$ROOT_DIR/scripts"
-PIDS_DIR="$SCRIPTS_DIR/pids"
-LOGS_DIR="$ROOT_DIR/logs"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATA_DIR="$ROOT_DIR/.moonstone"
+DEV_DIR="$DATA_DIR/dev"
+PID_DIR="$DEV_DIR/pids"
+LOG_DIR="$DEV_DIR/logs"
 
-mkdir -p "$PIDS_DIR" "$LOGS_DIR/backend" "$LOGS_DIR/frontend"
+LEGACY_PID_DIR="$ROOT_DIR/scripts/pids"
+
+BACKEND_PORT="${MOONSTONE_BACKEND_PORT:-8000}"
+FRONTEND_PORT="${MOONSTONE_FRONTEND_PORT:-3000}"
+CONDA_ENV_NAME="${MOONSTONE_CONDA_ENV:-moonstone}"
+BACKEND_PYTHON_OVERRIDE="${MOONSTONE_BACKEND_PYTHON:-}"
+
+BACKEND_PID_FILE="$PID_DIR/backend.pid"
+FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
+DASK_SCHED_PID_FILE="$PID_DIR/dask-scheduler.pid"
+DASK_WORKER_PID_FILE="$PID_DIR/dask-worker.pid"
+FRONTEND_PORT_FILE="$DEV_DIR/frontend.port"
+
+BACKEND_LOG="$LOG_DIR/backend/uvicorn.log"
+FRONTEND_LOG="$LOG_DIR/frontend/vite.log"
+DASK_SCHED_LOG="$LOG_DIR/backend/dask-scheduler.log"
+DASK_WORKER_LOG="$LOG_DIR/backend/dask-worker.log"
+
+BACKEND_BIN_DIR=""
+
+mkdir -p "$PID_DIR" "$LOG_DIR/backend" "$LOG_DIR/frontend" "$LEGACY_PID_DIR"
 
 OSRELEASE=""
 if [[ -r /proc/sys/kernel/osrelease ]]; then
@@ -16,14 +37,6 @@ IS_WSL=0
 if echo "$OSRELEASE" | grep -qiE "microsoft|wsl"; then
   IS_WSL=1
 fi
-
-BACKEND_PID_FILE="$PIDS_DIR/backend.pid"
-FRONTEND_PID_FILE="$PIDS_DIR/frontend.pid"
-DASK_SCHED_PID_FILE="$PIDS_DIR/dask-scheduler.pid"
-DASK_WORKER_PID_FILE="$PIDS_DIR/dask-worker.pid"
-
-BACKEND_LOG="$LOGS_DIR/backend/uvicorn.log"
-FRONT_LOG="$LOGS_DIR/frontend/vite.log"
 
 is_pid_running() {
   local pid="$1"
@@ -58,6 +71,22 @@ cwd_starts_with() {
   [[ -n "$cwd" ]] && [[ "$cwd" == "$prefix"* ]]
 }
 
+http_ok() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -sf "$url" >/dev/null 2>&1
+    return $?
+  fi
+  python3 - <<'PY' "$url" >/dev/null 2>&1
+import sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=1.0):
+        sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+}
+
 open_url() {
   local url="$1"
   if [[ "${MOONSTONE_NO_OPEN:-}" == "1" ]]; then
@@ -69,43 +98,89 @@ open_url() {
     return 0
   fi
 
+  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && "$(uname -s)" != "Darwin" ]]; then
+    echo "No GUI session detected. Open this URL manually: $url"
+    return 0
+  fi
+
   if command -v xdg-open >/dev/null 2>&1; then
     nohup xdg-open "$url" >/dev/null 2>&1 &
+  elif command -v open >/dev/null 2>&1; then
+    nohup open "$url" >/dev/null 2>&1 &
   fi
 }
 
-http_ok() {
-  local url="$1"
-  if command -v curl >/dev/null 2>&1; then
-    curl -sf "$url" >/dev/null 2>&1
-    return $?
+pick_backend_python() {
+  if [[ -n "$BACKEND_PYTHON_OVERRIDE" && -x "$BACKEND_PYTHON_OVERRIDE" ]]; then
+    echo "$BACKEND_PYTHON_OVERRIDE"
+    return 0
   fi
-  python - <<'PY' "$url" >/dev/null 2>&1
-import sys, urllib.request
-url = sys.argv[1]
-try:
-    with urllib.request.urlopen(url, timeout=1.0) as r:
-        sys.exit(0 if 200 <= getattr(r, 'status', 200) < 300 else 1)
-except Exception:
-    sys.exit(1)
-PY
-}
 
-# Try to use conda env 'moonstone' if present (prefer explicit env binaries).
-MOONSTONE_ENV_BIN=""
-if command -v conda >/dev/null 2>&1; then
-  # shellcheck disable=SC1091
-  source "$(conda info --base)/etc/profile.d/conda.sh" || true
-  if conda env list | grep -q "^\s*moonstone\s"; then
-    echo "Activating conda env 'moonstone'"
-    conda activate moonstone || true
+  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    echo "$ROOT_DIR/.venv/bin/python"
+    return 0
+  fi
 
-    CONDA_BASE="$(conda info --base 2>/dev/null || true)"
-    if [ -n "$CONDA_BASE" ] && [ -d "$CONDA_BASE/envs/moonstone/bin" ]; then
-      MOONSTONE_ENV_BIN="$CONDA_BASE/envs/moonstone/bin"
+  if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+    echo "$VIRTUAL_ENV/bin/python"
+    return 0
+  fi
+
+  if command -v conda >/dev/null 2>&1; then
+    # shellcheck disable=SC1091
+    source "$(conda info --base)/etc/profile.d/conda.sh" || true
+    if conda env list | awk '{print $1}' | grep -Fxq "$CONDA_ENV_NAME"; then
+      conda activate "$CONDA_ENV_NAME" >/dev/null 2>&1 || true
+      if command -v python >/dev/null 2>&1; then
+        command -v python
+        return 0
+      fi
     fi
   fi
-fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return 0
+  fi
+
+  return 1
+}
+
+copy_pid_to_legacy() {
+  local file_name="$1"
+  local source_file="$2"
+  if [[ -f "$source_file" ]]; then
+    cp "$source_file" "$LEGACY_PID_DIR/$file_name"
+  fi
+}
+
+wait_for_process_http() {
+  local pid="$1"
+  local url="$2"
+  local log_file="$3"
+  local label="$4"
+
+  for _ in {1..40}; do
+    if ! is_pid_running "$pid"; then
+      echo "$label exited during startup. Last log lines:" >&2
+      tail -n 60 "$log_file" >&2 || true
+      return 1
+    fi
+    if http_ok "$url"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  echo "$label did not become responsive at $url. Last log lines:" >&2
+  tail -n 60 "$log_file" >&2 || true
+  return 1
+}
 
 start_backend() {
   if [[ "${MOONSTONE_SKIP_BACKEND:-0}" == "1" ]]; then
@@ -118,77 +193,56 @@ start_backend() {
     pid="$(cat "$BACKEND_PID_FILE" || true)"
     if is_pid_running "$pid"; then
       echo "Backend appears to be running (pid $pid). Skipping start."
+      copy_pid_to_legacy "backend.pid" "$BACKEND_PID_FILE"
       return 0
     fi
   fi
 
   local listener_pid
-  listener_pid="$(find_listener_pid 8000)"
+  listener_pid="$(find_listener_pid "$BACKEND_PORT")"
   if [[ -n "$listener_pid" ]] && is_pid_running "$listener_pid"; then
     if cmdline_contains "$listener_pid" "uvicorn" && (cmdline_contains "$listener_pid" "app.main:app" || cwd_starts_with "$listener_pid" "$ROOT_DIR/backend"); then
       echo "$listener_pid" >"$BACKEND_PID_FILE"
-      echo "Backend already running on :8000 (adopted pid $listener_pid)."
+      copy_pid_to_legacy "backend.pid" "$BACKEND_PID_FILE"
+      echo "Backend already running on :$BACKEND_PORT (adopted pid $listener_pid)."
       return 0
     fi
-    echo "Port 8000 already in use by pid $listener_pid; backend not started." >&2
+    echo "Port $BACKEND_PORT already in use by pid $listener_pid; backend not started." >&2
     return 1
   fi
 
+  local backend_python
+  backend_python="$(pick_backend_python)" || {
+    echo "No suitable Python interpreter found for backend." >&2
+    return 1
+  }
+  BACKEND_BIN_DIR="$(dirname "$backend_python")"
+
   echo "Starting backend (uvicorn) ..."
   cd "$ROOT_DIR/backend"
+
+  "$backend_python" -c "import uvicorn, fastapi, app.main" >/dev/null 2>&1 || {
+    echo "Backend interpreter '$backend_python' is missing MoonStone backend deps." >&2
+    echo "Run: cd $ROOT_DIR/backend && $backend_python -m pip install -r requirements.txt" >&2
+    return 1
+  }
 
   local backend_host="127.0.0.1"
   if [[ "$IS_WSL" == "1" ]]; then
     backend_host="0.0.0.0"
   fi
 
-  local backend_python=""
-  if [[ -n "${MOONSTONE_BACKEND_PYTHON:-}" ]] && [[ -x "${MOONSTONE_BACKEND_PYTHON}" ]]; then
-    backend_python="${MOONSTONE_BACKEND_PYTHON}"
-  elif [[ -n "$MOONSTONE_ENV_BIN" ]] && [[ -x "$MOONSTONE_ENV_BIN/python" ]]; then
-    backend_python="$MOONSTONE_ENV_BIN/python"
-  elif command -v python3 >/dev/null 2>&1; then
-    backend_python="$(command -v python3)"
-  elif command -v python >/dev/null 2>&1; then
-    backend_python="$(command -v python)"
-  fi
+  nohup "$backend_python" -m uvicorn app.main:app --host "$backend_host" --port "$BACKEND_PORT" --log-level info >"$BACKEND_LOG" 2>&1 &
 
-  if [[ -z "$backend_python" ]]; then
-    echo "No suitable Python interpreter found for backend." >&2
+  local pid="$!"
+  echo "$pid" >"$BACKEND_PID_FILE"
+  copy_pid_to_legacy "backend.pid" "$BACKEND_PID_FILE"
+  if ! wait_for_process_http "$pid" "http://127.0.0.1:$BACKEND_PORT/docs" "$BACKEND_LOG" "Backend"; then
+    rm -f "$BACKEND_PID_FILE" "$LEGACY_PID_DIR/backend.pid"
     return 1
   fi
 
-  if ! "$backend_python" -c "import uvicorn" >/dev/null 2>&1; then
-    echo "Backend Python '$backend_python' cannot import uvicorn." >&2
-    echo "Install in your backend environment (e.g. pip install -r backend/requirements.txt) or set MOONSTONE_BACKEND_PYTHON." >&2
-    return 1
-  fi
-
-  nohup "$backend_python" -m uvicorn app.main:app --host "$backend_host" --port 8000 --log-level info > "$BACKEND_LOG" 2>&1 &
-  echo $! > "$BACKEND_PID_FILE"
   echo "Backend started, log: $BACKEND_LOG"
-
-  local backend_pid
-  backend_pid="$(cat "$BACKEND_PID_FILE")"
-  local backend_url="http://127.0.0.1:8000/"
-  for _ in {1..30}; do
-    if ! is_pid_running "$backend_pid"; then
-      echo "Backend exited during startup. Last log lines:"
-      tail -n 60 "$BACKEND_LOG" || true
-      rm -f "$BACKEND_PID_FILE"
-      return 1
-    fi
-    if http_ok "$backend_url"; then
-      echo "Backend is responsive at $backend_url"
-      return 0
-    fi
-    sleep 0.2
-  done
-
-  echo "Backend did not become responsive at $backend_url. Last log lines:"
-  tail -n 60 "$BACKEND_LOG" || true
-  rm -f "$BACKEND_PID_FILE"
-  return 1
 }
 
 start_frontend() {
@@ -197,89 +251,101 @@ start_frontend() {
     pid="$(cat "$FRONTEND_PID_FILE" || true)"
     if is_pid_running "$pid"; then
       echo "Frontend appears to be running (pid $pid). Skipping start."
+      echo "$FRONTEND_PORT" >"$FRONTEND_PORT_FILE"
+      copy_pid_to_legacy "frontend.pid" "$FRONTEND_PID_FILE"
       return 0
     fi
   fi
 
   local listener_pid
-  listener_pid="$(find_listener_pid 3000)"
+  listener_pid="$(find_listener_pid "$FRONTEND_PORT")"
   if [[ -n "$listener_pid" ]] && is_pid_running "$listener_pid"; then
-    if cwd_starts_with "$listener_pid" "$ROOT_DIR/frontend"; then
+    if cwd_starts_with "$listener_pid" "$ROOT_DIR/frontend" || cmdline_contains "$listener_pid" "vite"; then
       echo "$listener_pid" >"$FRONTEND_PID_FILE"
-      echo "Frontend already running on :3000 (adopted pid $listener_pid)."
+      echo "$FRONTEND_PORT" >"$FRONTEND_PORT_FILE"
+      copy_pid_to_legacy "frontend.pid" "$FRONTEND_PID_FILE"
+      echo "Frontend already running on :$FRONTEND_PORT (adopted pid $listener_pid)."
       return 0
     fi
-    echo "Port 3000 already in use by pid $listener_pid; frontend not started." >&2
+    echo "Port $FRONTEND_PORT already in use by pid $listener_pid; frontend not started." >&2
     return 1
   fi
 
   echo "Starting frontend (npm run dev) ..."
   cd "$ROOT_DIR/frontend"
 
-  if [ ! -d node_modules ]; then
+  if [[ ! -d node_modules ]]; then
     echo "Installing frontend dependencies (npm ci or fallback to npm install) ..."
     if npm ci --silent; then
       echo "npm ci succeeded"
     else
       echo "npm ci failed; attempting npm install"
-      if npm install --silent; then
-        echo "npm install succeeded"
-      else
-        echo "npm install failed; skipping frontend start"
-        return 1
-      fi
+      npm install --silent
     fi
   fi
 
   local api_base="${MOONSTONE_API_BASE_URL:-}"
   if [[ -z "$api_base" ]]; then
     if [[ "$IS_WSL" == "1" ]]; then
-      api_base="http://localhost:8000"
+      api_base="http://localhost:$BACKEND_PORT"
     else
-      api_base="http://127.0.0.1:8000"
+      api_base="http://127.0.0.1:$BACKEND_PORT"
     fi
   fi
   export VITE_API_BASE="$api_base"
 
-  if node -e "const p=require('./package.json'); process.exit((p && p.scripts && p.scripts.dev) ? 0 : 1)"; then
-    nohup npm run dev > "$FRONT_LOG" 2>&1 &
-    echo $! > "$FRONTEND_PID_FILE"
-    echo "Frontend started, log: $FRONT_LOG"
+  nohup npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" >"$FRONTEND_LOG" 2>&1 &
+
+  local pid="$!"
+  echo "$pid" >"$FRONTEND_PID_FILE"
+  echo "$FRONTEND_PORT" >"$FRONTEND_PORT_FILE"
+  copy_pid_to_legacy "frontend.pid" "$FRONTEND_PID_FILE"
+  if ! wait_for_process_http "$pid" "http://127.0.0.1:$FRONTEND_PORT" "$FRONTEND_LOG" "Frontend"; then
+    rm -f "$FRONTEND_PID_FILE" "$FRONTEND_PORT_FILE" "$LEGACY_PID_DIR/frontend.pid"
+    return 1
+  fi
+
+  echo "Frontend started, log: $FRONTEND_LOG"
+}
+
+start_dask() {
+  if [[ "${MOONSTONE_SKIP_DASK:-0}" == "1" ]]; then
+    echo "Skipping local Dask services (MOONSTONE_SKIP_DASK=1)."
     return 0
   fi
 
-  echo "Skipping frontend start (no 'dev' script)"
-  return 1
-}
+  local scheduler_cmd=""
+  local worker_cmd=""
+  if [[ -n "$BACKEND_BIN_DIR" && -x "$BACKEND_BIN_DIR/dask-scheduler" && -x "$BACKEND_BIN_DIR/dask-worker" ]]; then
+    scheduler_cmd="$BACKEND_BIN_DIR/dask-scheduler"
+    worker_cmd="$BACKEND_BIN_DIR/dask-worker"
+  elif command -v dask-scheduler >/dev/null 2>&1 && command -v dask-worker >/dev/null 2>&1; then
+    scheduler_cmd="dask-scheduler"
+    worker_cmd="dask-worker"
+  else
+    echo "Dask commands not found; skipping local scheduler/worker startup."
+    return 0
+  fi
 
-# Optional: start a local dask scheduler + worker if dask commands are available and not already running
-start_dask() {
-if command -v dask-scheduler >/dev/null 2>&1; then
-  if [ -f "$DASK_SCHED_PID_FILE" ] && is_pid_running "$(cat "$DASK_SCHED_PID_FILE")"; then
+  if [[ -f "$DASK_SCHED_PID_FILE" ]] && is_pid_running "$(cat "$DASK_SCHED_PID_FILE")"; then
     echo "Dask scheduler already running (pid $(cat "$DASK_SCHED_PID_FILE"))."
   else
     echo "Starting local dask-scheduler ..."
-    if [ -n "$MOONSTONE_ENV_BIN" ] && [ -x "$MOONSTONE_ENV_BIN/dask-scheduler" ]; then
-      nohup "$MOONSTONE_ENV_BIN/dask-scheduler" > "$LOGS_DIR/backend/dask-scheduler.log" 2>&1 &
-    else
-      nohup dask-scheduler > "$LOGS_DIR/backend/dask-scheduler.log" 2>&1 &
-    fi
-    echo $! > "$DASK_SCHED_PID_FILE"
+    nohup "$scheduler_cmd" >"$DASK_SCHED_LOG" 2>&1 &
+    echo "$!" >"$DASK_SCHED_PID_FILE"
+    copy_pid_to_legacy "dask-scheduler.pid" "$DASK_SCHED_PID_FILE"
     echo "Dask scheduler started"
   fi
-  if [ -f "$DASK_WORKER_PID_FILE" ] && is_pid_running "$(cat "$DASK_WORKER_PID_FILE")"; then
+
+  if [[ -f "$DASK_WORKER_PID_FILE" ]] && is_pid_running "$(cat "$DASK_WORKER_PID_FILE")"; then
     echo "Dask worker already running (pid $(cat "$DASK_WORKER_PID_FILE"))."
   else
     echo "Starting local dask-worker ..."
-    if [ -n "$MOONSTONE_ENV_BIN" ] && [ -x "$MOONSTONE_ENV_BIN/dask-worker" ]; then
-      nohup "$MOONSTONE_ENV_BIN/dask-worker" localhost:8786 > "$LOGS_DIR/backend/dask-worker.log" 2>&1 &
-    else
-      nohup dask-worker localhost:8786 > "$LOGS_DIR/backend/dask-worker.log" 2>&1 &
-    fi
-    echo $! > "$DASK_WORKER_PID_FILE"
+    nohup "$worker_cmd" localhost:8786 >"$DASK_WORKER_LOG" 2>&1 &
+    echo "$!" >"$DASK_WORKER_PID_FILE"
+    copy_pid_to_legacy "dask-worker.pid" "$DASK_WORKER_PID_FILE"
     echo "Dask worker started"
   fi
-fi
 }
 
 backend_ok=1
@@ -292,28 +358,29 @@ if ! start_frontend; then
 fi
 start_dask
 
-# Show short status
 echo "--- STATUS ---"
-if [ -f "$BACKEND_PID_FILE" ]; then
+if [[ -f "$BACKEND_PID_FILE" ]]; then
   echo "backend pid: $(cat "$BACKEND_PID_FILE")"
 fi
-if [ -f "$FRONTEND_PID_FILE" ]; then
+if [[ -f "$FRONTEND_PID_FILE" ]]; then
   echo "frontend pid: $(cat "$FRONTEND_PID_FILE")"
 fi
-if [ -f "$DASK_SCHED_PID_FILE" ]; then
+if [[ -f "$DASK_SCHED_PID_FILE" ]]; then
   echo "dask-scheduler pid: $(cat "$DASK_SCHED_PID_FILE")"
 fi
+if [[ -f "$DASK_WORKER_PID_FILE" ]]; then
+  echo "dask-worker pid: $(cat "$DASK_WORKER_PID_FILE")"
+fi
 
-if [ "$backend_ok" -eq 1 ]; then
-  echo "api: http://127.0.0.1:8000"
+if [[ "$backend_ok" -eq 1 ]]; then
+  echo "api: http://127.0.0.1:$BACKEND_PORT"
 else
   echo "api: (not running)"
 fi
-echo "ui:  http://127.0.0.1:3000"
+echo "ui:  http://127.0.0.1:$FRONTEND_PORT"
 
-if [ "$frontend_ok" -eq 1 ]; then
-  sleep 1
-  open_url "http://127.0.0.1:3000"
+if [[ "$frontend_ok" -eq 1 ]]; then
+  open_url "http://127.0.0.1:$FRONTEND_PORT"
 fi
 
 echo "Dev environment started. Use scripts/dev-down.sh to stop."
