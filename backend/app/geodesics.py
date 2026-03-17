@@ -142,18 +142,17 @@ def trace_static_metric_batch(source, directions, metric_cfg: dict, params: dict
 # Module-level Kerr helpers (reuseable by CPU/GPU code and tests)
 
 def kerr_r(px, py, pz, a_local):
-    rho2 = px*px + py*py + pz*pz - a_local*a_local
-    r = max(1e-6, (px*px + py*py + pz*pz) ** 0.5)
-    for _ in range(12):
-        F = r**4 - rho2 * r*r - (a_local*a_local) * (pz*pz)
-        dF = 4.0 * r**3 - 2.0 * rho2 * r
-        if dF == 0:
-            break
-        dr = F / dF
-        r -= dr
-        if abs(dr) < 1e-12:
-            break
-    return abs(r) + 1e-12
+    """Solve the Kerr-Schild radial equation r⁴ - ρ² r² - a² z² = 0 for r > 0.
+
+    This is a biquadratic in r; substituting u = r² gives u² - ρ² u - a² z² = 0,
+    which has the closed-form solution u = (ρ² + √(ρ⁴ + 4a²z²)) / 2.
+    """
+    rho2 = px * px + py * py + pz * pz - a_local * a_local
+    a2z2 = (a_local * a_local) * (pz * pz)
+    discriminant = rho2 * rho2 + 4.0 * a2z2
+    u = 0.5 * (rho2 + np.sqrt(max(0.0, discriminant)))
+    r = np.sqrt(max(1e-24, u))
+    return r
 
 
 def kerr_metric_cartesian(px, py, pz, M_local, a_local):
@@ -289,15 +288,37 @@ def trace_null_formal(source: Tuple[float,float,float], direction: Tuple[float,f
         return (fac * px, fac * py, fac * pz)
 
     def christoffel(px, py, pz):
-        # compute only Gamma^i_{tt} and Gamma^i_{jk} terms necessary for spatial acceleration
-        dPx, dPy, dPz = grad_P(px, py, pz)
-        # In linearized PN: Gamma^i_{tt} = -partial_i Phi, Gamma^i_{jk} ~ delta_jk partial_i Phi - delta_ij partial_k Phi - delta_ik partial_j Phi (scaled)
+        # Weak-field linearized Christoffel symbols for
+        #   g_{00} = -(1+2Φ), g_{ij} = (1-2Φ)δ_{ij}, g_{0i} = 0
+        # where Φ = -M/r.
+        dPx, dPy, dPz = grad_P(px, py, pz)  # ∂_i Φ = M·x_i/r³
+        dP = [0.0, dPx, dPy, dPz]  # index 0=t, 1=x, 2=y, 3=z
         Gamma = np.zeros((4,4,4))
-        # Gamma^i_{tt}
-        Gamma[1,0,0] = -dPx
-        Gamma[2,0,0] = -dPy
-        Gamma[3,0,0] = -dPz
-        # symmetric versions not needed beyond linear terms for this POC
+
+        # Γ^i_{00} = +∂_i Φ  (attractive Newtonian gravity via a^i = -Γ^i_{00} u^t²)
+        Gamma[1,0,0] = dPx
+        Gamma[2,0,0] = dPy
+        Gamma[3,0,0] = dPz
+
+        # Γ^0_{0i} = ∂_i Φ  (needed for u^t evolution)
+        Gamma[0,0,1] = dPx;  Gamma[0,1,0] = dPx
+        Gamma[0,0,2] = dPy;  Gamma[0,2,0] = dPy
+        Gamma[0,0,3] = dPz;  Gamma[0,3,0] = dPz
+
+        # Γ^i_{jk} = -∂_j Φ δ_{ik} - ∂_k Φ δ_{ij} + ∂_i Φ δ_{jk}
+        # These spatial Christoffels contribute equally to null-geodesic
+        # deflection (the "spatial curvature" half of the 4M/b result).
+        for i in range(1, 4):
+            for j in range(1, 4):
+                for k in range(1, 4):
+                    val = 0.0
+                    if i == k:
+                        val -= dP[j]
+                    if i == j:
+                        val -= dP[k]
+                    if j == k:
+                        val += dP[i]
+                    Gamma[i, j, k] = val
         return Gamma
 
     # initial 4-velocity: choose ut satisfying null condition to first order
@@ -317,17 +338,13 @@ def trace_null_formal(source: Tuple[float,float,float], direction: Tuple[float,f
         tt, px, py, pz, utt, uxv, uyv, uzv = state
         Gamma = christoffel(px, py, pz)
         # compute acceleration for each component: a^mu = - Gamma^mu_ab u^a u^b
-        a_t = 0.0
-        a_x = 0.0
-        a_y = 0.0
-        a_z = 0.0
         u = [utt, uxv, uyv, uzv]
-        for a in range(4):
-            for b in range(4):
-                a_x -= Gamma[1,a,b] * u[a] * u[b]
-                a_y -= Gamma[2,a,b] * u[a] * u[b]
-                a_z -= Gamma[3,a,b] * u[a] * u[b]
-        return np.array([utt, uxv, uyv, uzv, a_t, a_x, a_y, a_z], dtype=float)
+        accel = [0.0, 0.0, 0.0, 0.0]
+        for mu in range(4):
+            for a in range(4):
+                for b in range(4):
+                    accel[mu] -= Gamma[mu,a,b] * u[a] * u[b]
+        return np.array([utt, uxv, uyv, uzv, accel[0], accel[1], accel[2], accel[3]], dtype=float)
 
     state = np.array([t, x, y, z, ut0, ux0, uy0, uz0], dtype=float)
 
@@ -379,23 +396,12 @@ def trace_kerr_formal(source: Tuple[float,float,float], direction: Tuple[float,f
         a = float(Sz) if abs(Sz) > 0.0 else float(np.sqrt(Sx*Sx + Sy*Sy + Sz*Sz))
     M = float(mass)
 
-    def kerr_r(px, py, pz, a_local):
-        # Solve quartic for r using Newton iteration: r^4 - (rho2) r^2 - a^2 z^2 = 0
-        rho2 = px*px + py*py + pz*pz - a_local*a_local
-        r = max(1e-6, np.sqrt(px*px + py*py + pz*pz))
-        for _ in range(12):
-            F = r**4 - rho2 * r*r - (a_local*a_local) * (pz*pz)
-            dF = 4.0 * r**3 - 2.0 * rho2 * r
-            if dF == 0:
-                break
-            dr = F / dF
-            r -= dr
-            if abs(dr) < 1e-12:
-                break
-        return abs(r) + 1e-12
+    # Use the module-level closed-form kerr_r solver
+    from . import geodesics as _self
+    _kerr_r = _self.kerr_r
 
     def kerr_metric(px, py, pz):
-        r = kerr_r(px, py, pz, a)
+        r = _kerr_r(px, py, pz, a)
         denom = (r**4 + (a*a) * (pz*pz)) + 1e-24
         H = M * (r**3) / denom
         denom2 = r*r + a*a + 1e-12
@@ -414,7 +420,7 @@ def trace_kerr_formal(source: Tuple[float,float,float], direction: Tuple[float,f
 
     # expose a module-level metric helper for tests and other modules
     def kerr_metric_cartesian(px, py, pz, M_local, a_local):
-        r_loc = kerr_r(px, py, pz, a_local)
+        r_loc = _kerr_r(px, py, pz, a_local)
         denom = (r_loc**4 + (a_local*a_local) * (pz*pz)) + 1e-24
         H = M_local * (r_loc**3) / denom
         denom2 = r_loc*r_loc + a_local*a_local + 1e-12
@@ -441,7 +447,7 @@ def trace_kerr_formal(source: Tuple[float,float,float], direction: Tuple[float,f
         def dr_partials(px, py, pz, a_local):
             # implicit differentiation of quartic F(r,x,y,z) = r^4 - rho2 r^2 - a^2 z^2 = 0
             rho2 = px*px + py*py + pz*pz - a_local*a_local
-            r = kerr_r(px, py, pz, a_local)
+            r = _kerr_r(px, py, pz, a_local)
             dF_dr = 4.0 * r**3 - 2.0 * rho2 * r
             # partial derivatives of F w.r.t x,y,z
             dF_dx = -2.0 * px * r*r
@@ -456,7 +462,7 @@ def trace_kerr_formal(source: Tuple[float,float,float], direction: Tuple[float,f
             return (drdx, drdy, drdz)
 
         # compute r and its partials
-        r = kerr_r(px, py, pz, a)
+        r = _kerr_r(px, py, pz, a)
         drdx, drdy, drdz = dr_partials(px, py, pz, a)
 
         # helper values

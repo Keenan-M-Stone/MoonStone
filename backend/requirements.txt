@@ -1,6 +1,6 @@
-fastapi==0.95.2
-uvicorn[standard]==0.22.0
-pydantic==1.10.11
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
 python-multipart>=0.0.9
 
 # NumPy/SciPy wheels are Python-version sensitive.
@@ -12,7 +12,6 @@ scipy>=1.15.0; python_version >= '3.13'
 
 dask[distributed]==2026.1.2
 
-pytest==7.4.0; python_version < '3.13'
-pytest>=8.2.0; python_version >= '3.13'
+pytest>=9.0.0
 
 pytest-timeout==2.3.1

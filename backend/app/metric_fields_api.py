@@ -20,14 +20,10 @@ from .metric_fields import (
     load_metric_field,
     save_metric_field,
 )
+from .resource_policy import MAX_METRIC_GRID_POINTS, METRIC_COMPUTE_SEMAPHORE
 
 
 router = APIRouter()
-
-# Safety defaults for metric/grid-heavy operations
-MAX_METRIC_GRID_POINTS = 4_000_000
-# Limit concurrent expensive metric computations to avoid CPU exhaustion
-METRIC_COMPUTE_SEMAPHORE = asyncio.Semaphore(2)
 
 # Lightweight instrumentation (in-process)
 METRIC_COMPUTE_ACTIVE = 0
@@ -238,9 +234,6 @@ async def metric_field_generate_weakfield(body: Dict[str, Any]):
         "field_id": "optional"
       }
     """
-    # Safety cap to avoid huge grid allocations from accidental requests
-    MAX_METRIC_GRID_POINTS = 4_000_000
-
     grid = body.get('grid', {}) if isinstance(body, dict) else {}
     origin = tuple(grid.get('origin', (0.0, 0.0, 0.0)))
     spacing = tuple(grid.get('spacing', (1.0, 1.0, 1.0)))
@@ -299,9 +292,6 @@ async def metric_field_generate_by_sampling(body: Dict[str, Any]):
     """
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail='body must be an object')
-
-    # Safety cap to avoid huge grid allocations
-    MAX_METRIC_GRID_POINTS = 4_000_000
 
     grid = body.get('grid', {})
     metric_cfg = body.get('metric', {})

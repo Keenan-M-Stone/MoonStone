@@ -117,24 +117,29 @@ def metric_at(point: Tuple[float, float, float], metric_cfg: Dict[str, Any]) -> 
 
 
 def schwarzschild_metric(point: Tuple[float, float, float], mass: float) -> np.ndarray:
-    """Return a 4x4 Schwarzschild metric in isotropic-like coordinates for POC.
+    """Return a 4x4 Schwarzschild metric in Kerr-Schild Cartesian coordinates.
 
-    This is a simplified, static spherically-symmetric metric centered at origin.
-    We return g_{mu nu} as a numpy array with signature (-,+,+,+) to match the
-    Plebanski mapping convention used by SunStone's ULF utilities.
+    Uses the Kerr-Schild form with spin a=0:
+        g_{μν} = η_{μν} + 2(M/r) l_μ l_ν
+    where l^μ = (1, x/r, y/r, z/r) is the ingoing null vector.
+
+    This form:
+    - Is regular everywhere except r=0
+    - Has signature (-,+,+,+) at spatial infinity
+    - Reduces to Minkowski for M→0
+    - Matches the Kerr-Schild form used by the Kerr integrator (a→0 limit)
     """
     x, y, z = point
-    r = np.sqrt(x * x + y * y + z * z) + 1e-12
+    r = np.sqrt(x * x + y * y + z * z)
+    r = max(r, 1e-12)
     m = float(mass)
-    # Isotropic radial factor (approximate) — simple POC form
-    rs = 2.0 * m
-    f = 1.0 - rs / r
-    g = np.zeros((4, 4), dtype=float)
-    g[0, 0] = -f
-    invf = 1.0 / f
-    g[1, 1] = invf
-    g[2, 2] = invf
-    g[3, 3] = invf
+    H = m / r
+    # Kerr-Schild null vector l_μ = (1, x/r, y/r, z/r)
+    l = np.array([1.0, x / r, y / r, z / r], dtype=float)
+    g = np.diag([-1.0, 1.0, 1.0, 1.0])
+    for mu in range(4):
+        for nu in range(4):
+            g[mu, nu] += 2.0 * H * l[mu] * l[nu]
     return g
 
 
@@ -200,9 +205,17 @@ def galadriel_metric(
 def plebanski_mapping(metric: np.ndarray) -> Dict[str, np.ndarray]:
     """Compute Plebanski constitutive tensors (eps, mu, xi, zeta) from a 4x4 metric g_{μν}.
 
-    Convention matches SunStone's `plebanski_from_metric` implementation:
-    - metric signature assumed (-,+,+,+)
-    - flat Minkowski gives eps=mu≈-I, xi=zeta≈0
+    Implements the vacuum constitutive relation in curved spacetime:
+        H^{μν} = √(-g) g^{μα} g^{νβ} F_{αβ}
+    decomposed into 3x3 blocks via the (E,B) -> (D,H) split.
+
+    Convention:
+    - Metric signature (-,+,+,+)
+    - Flat Minkowski → eps = mu = -I, xi = zeta = 0.
+
+    This follows Plebanski (1960) / Hehl & Obukhov (2003, Ch. D.5),
+    where the mapping is obtained by probing with unit field-strength
+    basis vectors and reading off the constitutive response.
 
     Returns numpy arrays (3x3) for keys: eps, mu, xi, zeta.
     """

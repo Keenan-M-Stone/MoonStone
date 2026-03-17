@@ -1,6 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from .models import TraceRequest, TraceResult, TracePoint
 from .geodesics import trace_flat, trace_schwarzschild_weak, trace_delayed, trace_flat_batch, trace_schwarzschild_batch, trace_static_metric_batch
+from .resource_policy import MAX_DIRECTIONS, MAX_NPOINTS, MAX_STORED_TRACES, TRACE_COMPUTE_SEMAPHORE
 import uuid
 import json
 from typing import Dict
@@ -9,11 +10,6 @@ router = APIRouter()
 
 # in-memory store for demo
 _TRACES: Dict[str, TraceResult] = {}
-
-# Safety caps to avoid unbounded resource usage from client requests
-MAX_DIRECTIONS = 2048
-MAX_NPOINTS = 10000
-MAX_STORED_TRACES = 200
 
 @router.post('/trace', response_model=TraceResult)
 async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
@@ -63,45 +59,46 @@ async def submit_trace(req: TraceRequest, background_tasks: BackgroundTasks):
             _TRACES.pop(oldest_key, None)
         return res
 
-    # Not cached: compute
-    directions = [ (d.x, d.y, d.z) for d in req.directions ]
-    # matrix/field tracing uses the generic static-metric integrator; keep local for now
-    if mtype in ('matrix', 'field'):
-        try:
-            results = trace_static_metric_batch((req.source.x, req.source.y, req.source.z), directions, metric, req.params or {})
-        except FileNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    else:
-        try:
-            # If Dask available, submit a single batched job (better for GPU-enabled workers)
-            from dask.distributed import Client
-            client = Client() if Client.scheduler_info()['address'] is None else Client()
-            # prefer GPU workers when requested
-            submit_options = {}
-            if (req.params or {}).get('device') == 'gpu':
-                submit_options['resources'] = {'GPU': 1}
+    # Not cached: compute (gated by semaphore to limit concurrent heavy work)
+    async with TRACE_COMPUTE_SEMAPHORE:
+        directions = [ (d.x, d.y, d.z) for d in req.directions ]
+        # matrix/field tracing uses the generic static-metric integrator; keep local for now
+        if mtype in ('matrix', 'field'):
+            try:
+                results = trace_static_metric_batch((req.source.x, req.source.y, req.source.z), directions, metric, req.params or {})
+            except FileNotFoundError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=str(e))
+        else:
+            try:
+                # If Dask available, submit a single batched job (better for GPU-enabled workers)
+                from dask.distributed import Client
+                client = Client() if Client.scheduler_info()['address'] is None else Client()
+                # prefer GPU workers when requested
+                submit_options = {}
+                if (req.params or {}).get('device') == 'gpu':
+                    submit_options['resources'] = {'GPU': 1}
 
-            if mtype == 'schwarzschild':
-                mass = metric.get('mass', 1.0)
-                fut = client.submit('app.geodesics.trace_schwarzschild_batch', (req.source.x, req.source.y, req.source.z), directions, mass, req.params or {}, **submit_options)
-            else:
-                fut = client.submit('app.geodesics.trace_flat_batch', (req.source.x, req.source.y, req.source.z), directions, req.params or {}, **submit_options)
-            results = client.gather(fut)
-            # client.gather may return the batched result directly or a list with one element depending on serialization
-            # normalize the possible wrapped result
-            if isinstance(results, list) and len(results) == 1 and isinstance(results[0], list):
-                results = results[0]
-        except Exception:
-            # fallback: local batched call
-            if mtype == 'schwarzschild':
-                mass = metric.get('mass', 1.0)
-                results = trace_schwarzschild_batch((req.source.x, req.source.y, req.source.z), directions, mass, req.params or {})
-            else:
-                results = trace_flat_batch((req.source.x, req.source.y, req.source.z), directions, req.params or {})
+                if mtype == 'schwarzschild':
+                    mass = metric.get('mass', 1.0)
+                    fut = client.submit('app.geodesics.trace_schwarzschild_batch', (req.source.x, req.source.y, req.source.z), directions, mass, req.params or {}, **submit_options)
+                else:
+                    fut = client.submit('app.geodesics.trace_flat_batch', (req.source.x, req.source.y, req.source.z), directions, req.params or {}, **submit_options)
+                results = client.gather(fut)
+                # client.gather may return the batched result directly or a list with one element depending on serialization
+                # normalize the possible wrapped result
+                if isinstance(results, list) and len(results) == 1 and isinstance(results[0], list):
+                    results = results[0]
+            except Exception:
+                # fallback: local batched call
+                if mtype == 'schwarzschild':
+                    mass = metric.get('mass', 1.0)
+                    results = trace_schwarzschild_batch((req.source.x, req.source.y, req.source.z), directions, mass, req.params or {})
+                else:
+                    results = trace_flat_batch((req.source.x, req.source.y, req.source.z), directions, req.params or {})
 
     # record and cache
     pts_list = results[0] if results else []
@@ -343,6 +340,51 @@ async def export_trace_tensor(trace_id: str):
         t = constitutive_at((p.x, p.y, p.z), metric)
         samples.append({'point': {'x': p.x, 'y': p.y, 'z': p.z}, 'eps': t['eps'].tolist(), 'mu': t['mu'].tolist(), 'xi': t['xi'].tolist(), 'zeta': t['zeta'].tolist()})
     return {'trace_id': trace_id, 'metric': metric, 'samples': samples}
+
+
+@router.post('/plebanski-grid')
+async def plebanski_grid(body: dict):
+    """Compute Plebanski constitutive tensors on a spatial grid.
+
+    Body: { metric: {...}, bounds: {xmin, xmax, ymin, ymax}, nx, ny, z }
+    Returns SunStone-compatible material grid.
+    """
+    from .metrics import constitutive_at
+
+    metric_cfg = body.get('metric', {})
+    bounds = body.get('bounds', {})
+    nx = min(int(body.get('nx', 8)), 64)
+    ny = min(int(body.get('ny', 8)), 64)
+    z = float(body.get('z', 0.0))
+
+    xmin = float(bounds.get('xmin', -1.0))
+    xmax = float(bounds.get('xmax', 1.0))
+    ymin = float(bounds.get('ymin', -1.0))
+    ymax = float(bounds.get('ymax', 1.0))
+
+    dx = (xmax - xmin) / max(nx - 1, 1)
+    dy = (ymax - ymin) / max(ny - 1, 1)
+
+    grid = []
+    for iy in range(ny):
+        for ix in range(nx):
+            x = xmin + ix * dx
+            y = ymin + iy * dy
+            t = constitutive_at((x, y, z), metric_cfg)
+            grid.append({
+                'x': x, 'y': y, 'z': z,
+                'eps': t['eps'].tolist(),
+                'mu': t['mu'].tolist(),
+                'xi': t['xi'].tolist(),
+                'zeta': t['zeta'].tolist(),
+            })
+
+    return {
+        'metric': metric_cfg,
+        'bounds': {'xmin': xmin, 'xmax': xmax, 'ymin': ymin, 'ymax': ymax},
+        'nx': nx, 'ny': ny, 'z': z,
+        'grid': grid,
+    }
 
 
 @router.post('/bench/save')

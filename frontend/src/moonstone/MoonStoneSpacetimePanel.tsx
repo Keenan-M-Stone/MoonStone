@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import MetricViewportPanel from './MetricViewportPanel'
+import { fetchPlebanskiGrid } from '../api'
 
 type DisplayMassUnit = 'kg' | 'Msun'
 type DisplayVelocityUnit = 'm/s' | 'km/s' | '%c'
@@ -30,6 +31,8 @@ export default function MoonStoneSpacetimePanel(props: Props) {
   const [recalcOnZoom, setRecalcOnZoom] = useState(false)
   const [updateMode, setUpdateMode] = useState<'drag' | 'drop' | 'refresh'>('drop')
   const [recomputeToken, setRecomputeToken] = useState(0)
+  const [metricConfig, setMetricConfig] = useState<any>({ type: 'schwarzschild' })
+  const [exportBusy, setExportBusy] = useState(false)
 
   const statusText = useMemo(() => {
     if (updateMode === 'drag') return 'Updating during interaction.'
@@ -46,6 +49,54 @@ export default function MoonStoneSpacetimePanel(props: Props) {
     if (updateMode === 'drop') return 'deferred'
     return 'manual'
   }, [updateMode])
+
+  const handleExportToSunStone = useCallback(async () => {
+    setExportBusy(true)
+    try {
+      const [cx, cy] = props.viewCenter
+      const halfW = props.safeCellSize[0] / 2
+      const halfH = props.safeCellSize[1] / 2
+      const result = await fetchPlebanskiGrid({
+        metric: metricConfig,
+        bounds: { xmin: cx - halfW, xmax: cx + halfW, ymin: cy - halfH, ymax: cy + halfH },
+        nx: 16,
+        ny: 16,
+        z: 0,
+      })
+
+      // Format as SunStone-compatible material grid
+      const sunstoneExport = {
+        format: 'sunstone-material-grid',
+        version: 1,
+        source: 'moonstone-plebanski',
+        metric: result.metric,
+        bounds: result.bounds,
+        resolution: { nx: result.nx, ny: result.ny },
+        materials: result.grid.map((cell: any, i: number) => ({
+          id: `plebanski_${i}`,
+          label: `Plebanski sample (${cell.x.toExponential(2)}, ${cell.y.toExponential(2)})`,
+          epsilon: cell.eps,
+          mu: cell.mu,
+          xi: cell.xi,
+          zeta: cell.zeta,
+          position: { x: cell.x, y: cell.y, z: cell.z },
+        })),
+      }
+
+      const blob = new Blob([JSON.stringify(sunstoneExport, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `moonstone-plebanski-export.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Plebanski grid export failed:', err)
+      alert('Export failed: ' + String(err))
+    } finally {
+      setExportBusy(false)
+    }
+  }, [props.viewCenter, props.safeCellSize, metricConfig])
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: 'rgba(2,6,23,1)', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }}>
@@ -102,6 +153,14 @@ export default function MoonStoneSpacetimePanel(props: Props) {
           </select>
           <button onClick={() => setRecomputeToken((t) => t + 1)} disabled={!drawCurvature && !drawPhotons} title="Refresh spacetime canvas">
             Refresh
+          </button>
+          <button
+            onClick={handleExportToSunStone}
+            disabled={exportBusy}
+            title="Export Plebanski constitutive tensors for the current viewport as a SunStone-compatible material grid"
+            style={{ background: 'rgba(56,189,248,0.15)', borderColor: 'rgba(56,189,248,0.4)' }}
+          >
+            {exportBusy ? 'Exporting...' : 'Export to SunStone'}
           </button>
           <div style={{ color: 'rgba(148,163,184,0.82)', fontSize: 11 }}>
             {props.safeZoom.toFixed(2)}× · {modeLabel}

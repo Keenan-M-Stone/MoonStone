@@ -24,6 +24,17 @@ export async function exportTrace(traceId: string){
   return r.data
 }
 
+export async function fetchPlebanskiGrid(params: {
+  metric: any
+  bounds: { xmin: number; xmax: number; ymin: number; ymax: number }
+  nx: number
+  ny: number
+  z?: number
+}) {
+  const r = await axios.post(`${API_BASE}/moon/plebanski-grid`, params)
+  return r.data
+}
+
 export async function saveScene(scene: any){
   const r = await axios.post(`${API_BASE}/moon/scene`, scene)
   return r.data
