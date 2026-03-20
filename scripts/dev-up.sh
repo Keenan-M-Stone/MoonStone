@@ -38,6 +38,13 @@ if echo "$OSRELEASE" | grep -qiE "microsoft|wsl"; then
   IS_WSL=1
 fi
 
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
 is_pid_running() {
   local pid="$1"
   [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
@@ -107,6 +114,10 @@ open_url() {
     nohup xdg-open "$url" >/dev/null 2>&1 &
   elif command -v open >/dev/null 2>&1; then
     nohup open "$url" >/dev/null 2>&1 &
+  elif command -v python3 >/dev/null 2>&1; then
+    nohup python3 -m webbrowser "$url" >/dev/null 2>&1 &
+  else
+    echo "No browser opener found. Open this URL manually: $url"
   fi
 }
 
@@ -271,6 +282,7 @@ start_frontend() {
     return 1
   fi
 
+  require_cmd npm
   echo "Starting frontend (npm run dev) ..."
   cd "$ROOT_DIR/frontend"
 
@@ -358,29 +370,16 @@ if ! start_frontend; then
 fi
 start_dask
 
-echo "--- STATUS ---"
-if [[ -f "$BACKEND_PID_FILE" ]]; then
-  echo "backend pid: $(cat "$BACKEND_PID_FILE")"
-fi
-if [[ -f "$FRONTEND_PID_FILE" ]]; then
-  echo "frontend pid: $(cat "$FRONTEND_PID_FILE")"
-fi
-if [[ -f "$DASK_SCHED_PID_FILE" ]]; then
-  echo "dask-scheduler pid: $(cat "$DASK_SCHED_PID_FILE")"
-fi
-if [[ -f "$DASK_WORKER_PID_FILE" ]]; then
-  echo "dask-worker pid: $(cat "$DASK_WORKER_PID_FILE")"
-fi
-
-if [[ "$backend_ok" -eq 1 ]]; then
-  echo "api: http://127.0.0.1:$BACKEND_PORT"
+echo "UI:      http://127.0.0.1:${FRONTEND_PORT}"
+if [[ "$backend_ok" == "1" ]]; then
+  echo "API:     http://127.0.0.1:${BACKEND_PORT}"
+  echo "API docs http://127.0.0.1:${BACKEND_PORT}/docs"
 else
-  echo "api: (not running)"
-fi
-echo "ui:  http://127.0.0.1:$FRONTEND_PORT"
-
-if [[ "$frontend_ok" -eq 1 ]]; then
-  open_url "http://127.0.0.1:$FRONTEND_PORT"
+  echo "API:     (not running)"
 fi
 
-echo "Dev environment started. Use scripts/dev-down.sh to stop."
+if [[ "$frontend_ok" == "1" ]]; then
+  open_url "http://127.0.0.1:${FRONTEND_PORT}"
+else
+  echo "Frontend may not be running. Open this URL manually: http://127.0.0.1:${FRONTEND_PORT}"
+fi

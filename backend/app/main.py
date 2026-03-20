@@ -8,6 +8,12 @@ from .curvature_api import router as curvature_router
 from .compat_metrics_api import router as compat_metrics_router
 from .compute_api import router as compute_router
 
+# Pipeline routes (StarDust-compatible project/run infrastructure)
+from .pipeline.routes.projects import router as pipeline_projects_router
+from .pipeline.routes.runs import router as pipeline_runs_router
+from .pipeline.routes.artifacts import router as pipeline_artifacts_router
+from .pipeline.routes.backends import router as pipeline_backends_router
+
 app = FastAPI(title="MoonStone Trace Service")
 
 app.add_middleware(
@@ -25,6 +31,12 @@ app.include_router(curvature_router, prefix="/moon")
 from .scenes import router as scenes_router
 app.include_router(scenes_router, prefix="/moon")
 app.include_router(compute_router, prefix="/moon")
+
+# StarDust-compatible pipeline routes (project/run/artifact/backend management)
+app.include_router(pipeline_projects_router)
+app.include_router(pipeline_runs_router)
+app.include_router(pipeline_artifacts_router)
+app.include_router(pipeline_backends_router)
 
 # Root-level compatibility endpoints for StarDust UI components (ResourceMonitor).
 app.include_router(compat_metrics_router)

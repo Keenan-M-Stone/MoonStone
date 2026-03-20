@@ -1,0 +1,87 @@
+{
+  "format": "stardust.bundle",
+  "version": "0.1",
+  "manifest": {
+    "name": "MoonStone Default",
+    "mode": "cad",
+    "dimension": "2d"
+  },
+  "_comments": {
+    "units": "All coordinates in meters. 1 MLY ≈ 9.4607304725808e+21 m.",
+    "solar_mass_kg": 1.98847e30
+  },
+  "cad": {
+    "materials": [
+      { "id": "vac", "label": "Vacuum", "color": "#94a3b8" },
+      { "id": "avg_star", "label": "Average star", "color": "#e2e8f0",
+        "payload": { "massKg": 1.98847e30 } },
+      { "id": "pulsar", "label": "Pulsar", "color": "#38bdf8",
+        "payload": { "massKg": 2.783858e30, "densityKgM3": 1e17 } },
+      { "id": "white_dwarf", "label": "White dwarf", "color": "#a78bfa",
+        "payload": { "massKg": 1.193082e30, "densityKgM3": 1e9 } },
+      { "id": "black_hole_static", "label": "Black hole (static)", "color": "#94a3b8",
+        "payload": { "massKg": 1.98847e31 } },
+      { "id": "black_hole_rotating", "label": "Black hole (rotating)", "color": "#94a3b8",
+        "payload": { "massKg": 1.98847e31, "spinRps": 50 } },
+      { "id": "cosmic_string", "label": "Cosmic string", "color": "#e2e8f0",
+        "payload": { "tension": 1 } },
+      { "id": "white_hole", "label": "White hole", "color": "#e2e8f0",
+        "payload": { "massKg": 1.98847e31 } },
+      { "id": "tipler_cylinder", "label": "Tipler cylinder", "color": "#f97316",
+        "payload": { "massKg": 1e28, "densityKgM3": 1e4 } },
+      { "id": "magnani_gas_cloud", "label": "Magnani gas cloud", "color": "#38bdf8",
+        "payload": { "massKg": 1e25, "densityKgM3": 1e-18 } }
+    ],
+    "geometry": [
+      {
+        "id": "geom-star-1", "shape": "sphere",
+        "center": [-3.027433751225856e22, -5.676438283548479e21], "centerZ": 0,
+        "size": [7.56858437806464e20, 7.56858437806464e20], "sizeZ": 7.56858437806464e20,
+        "materialId": "avg_star"
+      },
+      {
+        "id": "geom-star-2", "shape": "sphere",
+        "center": [-3.027433751225856e22, 5.676438283548479e21], "centerZ": 0,
+        "size": [7.56858437806464e20, 7.56858437806464e20], "sizeZ": 7.56858437806464e20,
+        "materialId": "avg_star"
+      },
+      {
+        "id": "geom-bh-1", "shape": "sphere",
+        "center": [-3.7842921890323195e20, 0], "centerZ": 0,
+        "size": [4.7303652362904e20, 4.7303652362904e20], "sizeZ": 4.7303652362904e20,
+        "materialId": "black_hole_static"
+      },
+      {
+        "id": "geom-bh-2", "shape": "sphere",
+        "center": [3.7842921890323195e20, 0], "centerZ": 0,
+        "size": [4.7303652362904e20, 4.7303652362904e20], "sizeZ": 4.7303652362904e20,
+        "materialId": "black_hole_static"
+      }
+    ],
+    "sources": [
+      {
+        "id": "src-star-1",
+        "position": [-3.027433751225856e22, -5.676438283548479e21],
+        "z": 0, "component": "Ez", "centerFreq": 4.0e14, "fwidth": 6.0e13
+      },
+      {
+        "id": "src-star-2",
+        "position": [-3.027433751225856e22, 5.676438283548479e21],
+        "z": 0, "component": "Ez", "centerFreq": 4.0e14, "fwidth": 6.0e13
+      }
+    ],
+    "monitors": [
+      {
+        "id": "mon-observer",
+        "position": [3.027433751225856e22, 0],
+        "z": 0, "components": ["Ez"], "dt": 1e-16,
+        "shape": "point",
+        "size": [2.8382191417742396e21, 2.8382191417742396e21],
+        "sampling": { "mode": "points", "nx": 5, "ny": 5, "fallbackToPoints": true }
+      }
+    ],
+    "domain": {
+      "cell_size": [7.56858437806464e22, 5.676438283548479e22, 1.89214609451616e22]
+    }
+  }
+}

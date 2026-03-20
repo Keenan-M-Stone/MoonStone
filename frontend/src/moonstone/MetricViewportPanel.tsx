@@ -279,8 +279,15 @@ export default function MetricViewportPanel(p: MetricViewportPanelProps) {
       if (now - (lastComputeMsRef.current || 0) < 140) allowRecompute = false
     }
 
-    const massScale = 1e-30
-    const softening = Math.max(Math.min(halfW, halfH) * 1e-3, 1e-12)
+    // Adaptive mass scaling: normalise so the dominant mass produces
+    // ~0.3 rad total photon deflection through the gravitational lens region.
+    // At astrophysical scales (MLY) the original 1e-30 yields negligible effects.
+    const maxMassKg = masses.reduce((mx, mm) => Math.max(mx, mm.m), 0)
+    const halfMin = Math.min(halfW || 1, halfH || 1)
+    const massScale = maxMassKg > 0
+      ? halfMin / (1000 * maxMassKg)
+      : 1e-30
+    const softening = Math.max(halfMin * 1e-3, 1e-12)
 
     const phi = (x: number, y: number) => {
       let out = 0
@@ -323,7 +330,16 @@ export default function MetricViewportPanel(p: MetricViewportPanelProps) {
       gridLines = Math.max(8, Math.floor(gridLines * 0.75))
     }
 
-    const warpK = 0.18 * Math.min(halfW || 1, halfH || 1)
+    const warpK = 0.18 * halfMin
+    // Amplified grid warp; tanh-capped so mass centres don't explode.
+    const gridWarpK = warpK * halfMin / 3
+    const gridWarpCap = 0.15 * 2 * halfMin / gridLines
+    const warpDisp = (gx: number, gy: number): [number, number] => {
+      const gmag = Math.hypot(gx, gy)
+      if (gmag < 1e-40) return [0, 0]
+      const capD = gridWarpCap * Math.tanh(gridWarpK * gmag / gridWarpCap)
+      return [capD * gx / gmag, capD * gy / gmag]
+    }
     const roundKey = (v: number) => (Number.isFinite(v) ? Number(v).toPrecision(6) : 'nan')
 
     const srcs = (Array.isArray(sources) ? sources : []).slice(0, 8)
@@ -404,7 +420,8 @@ export default function MetricViewportPanel(p: MetricViewportPanelProps) {
             const s = j / samples
             const y = -halfH + s * (2 * halfH)
             const [gx, gy] = gradPhi(x0, y)
-            vertical.push([x0 + warpK * gx, y + warpK * gy])
+            const [wx, wy] = warpDisp(gx, gy)
+            vertical.push([x0 + wx, y + wy])
           }
           gridLinesWorld.push(vertical)
 
@@ -417,7 +434,8 @@ export default function MetricViewportPanel(p: MetricViewportPanelProps) {
             const s = j / samples
             const x = -halfW + s * (2 * halfW)
             const [gx, gy] = gradPhi(x, y0)
-            horizontal.push([x + warpK * gx, y0 + warpK * gy])
+            const [wx, wy] = warpDisp(gx, gy)
+            horizontal.push([x + wx, y0 + wy])
           }
           gridLinesWorld.push(horizontal)
 

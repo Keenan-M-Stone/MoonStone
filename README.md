@@ -7,10 +7,10 @@ This repository is a starting scaffold created from the SunStone project. It con
 Note: The frontend uses the `@stardust/ui` package (StarDust) as the primary UI shell. MoonStone now stays intentionally close to the base StarDust CAD interface and adds only a synced auxiliary spacetime canvas in the CAD section slot rather than a separate bespoke editor shell. See `StarDust/frontend/README.md` for details and demo.
 
 - `frontend/` — Vite + React + TypeScript frontend (StarDust CAD shell + synced spacetime canvas)
-- `backend/` — Python (FastAPI) backend with Dask-ready trace worker and a Schwarzschild POC
+- `backend/` — Python (FastAPI) backend with geodesic tracer, metric-field I/O, and a full run pipeline
 - `docs/` — design & roadmap adapted from SunStone's Ulf design
 
-Goal: enable fast, interactive simulation and visualization of null geodesics and metric→constitutive tensor mappings. For heavy compute we use Python + Dask and optional Numba/CUDA and C++ kernels for acceleration. For interactive responsiveness we provide a low-cost fast-mode trace + disk cache (backend) and a refine flow for high-fidelity results.
+Goal: enable fast, interactive simulation and visualization of null geodesics, metric→constitutive tensor mappings, and full numerical-relativity solver runs via pluggable backends. For heavy compute we use Python + Dask and optional Numba/CUDA and C++ kernels for acceleration. For interactive responsiveness we provide a low-cost fast-mode trace + disk cache (backend) and a refine flow for high-fidelity results.
 
 Quick start (backend):
 
@@ -31,8 +31,39 @@ npm run dev
 ## Running tests & notebooks
 
 ```bash
+# Backend tests (62 pass, 21 skip for GPU/integration)
+cd backend && pip install -e . && pytest
+
+# Pipeline tests only
+pytest backend/tests/test_pipeline.py
+
+# Notebooks
 python -m pip install nbconvert jupyter
 jupyter nbconvert --to notebook --execute docs/methods_notebook.ipynb --ExecutePreprocessor.timeout=120
+```
+
+## Run Pipeline
+
+MoonStone includes a full StarDust-compatible run pipeline (`backend/app/pipeline/`) for submitting simulation jobs to GR solver backends.
+
+### GR Backends
+
+| Backend | Key | Status |
+|---------|-----|--------|
+| Dummy (no-op) | `dummy` | Working |
+| Einstein Toolkit (Cactus/CarpetX) | `einstein_toolkit` | Stub — validates spec, writes placeholder |
+| Dendro-GR (AMR octree) | `dendro_gr` | Stub |
+| GRTresna (constraint solver) | `grtresna` | Stub |
+| GR1D (spherical 1D) | `gr1d` | Stub |
+
+### Pipeline Endpoints
+
+- `POST /pipeline/projects` / `GET /pipeline/projects` — project CRUD
+- `POST /pipeline/projects/{id}/runs` / `GET /pipeline/runs/{id}` — run lifecycle
+- `POST /pipeline/runs/{id}/submit?backend=<key>` — submit to solver
+- `GET /pipeline/runs/{id}/logs` / `GET /pipeline/runs/{id}/resource` — monitoring
+- `GET /pipeline/artifacts/{run_id}` / `GET /pipeline/artifacts/{run_id}/{path}` — outputs
+- `GET /pipeline/backends` / `POST /pipeline/backends/{key}/translate` — backend negotiation
 
 ## Metric Field Import/Export (baseline grids)
 
@@ -102,6 +133,9 @@ To sample constitutive tensors from an imported field, call `/moon/metric` with:
 ```
 
 ## Development Checklist (current gaps)
+- [x] Full run pipeline with project/run lifecycle, job runner, and backend registry.
+- [x] GR backend stubs (Einstein Toolkit, Dendro-GR, GRTresna, GR1D).
+- [x] Pipeline test coverage (test_pipeline.py — 6 tests).
 - [ ] Symbolic expansion & device hard-coding of full Christoffel components on-device for maximum fidelity and performance.
 - [ ] Waveform extraction & transformation-optics export path (planned module and exporter).
 - [ ] Advanced GPU profiling and micro-optimizations for CUDA kernels.
